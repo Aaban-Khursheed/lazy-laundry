@@ -1,0 +1,13 @@
+{
+  "name": "lazylaundrycomingsoon",
+  "compatibility_date": "2026-09-28",
+  "assets": {
+    "directory": "."
+  },
+  "routes": [
+    {
+      "pattern": "lazylaundry.me",
+      "custom_domain": true
+    }
+  ]
+}
