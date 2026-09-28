@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f8d21c" />
+    <meta name="description" content="Lazy Laundry pickup and delivery is coming soon to Edumetro and USJ 1." />
+    <title>Lazy Laundry — Coming Soon</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="site-header">
+        <a class="brand" href="./" aria-label="Lazy Laundry home">
+          <span class="brand-script">Lazy</span>
+          <span class="brand-name">LAUNDRY</span>
+        </a>
+        <span class="header-badge">PICKUP + DELIVERY</span>
+      </header>
+
+      <main>
+        <section class="view home-view coming-soon-view" id="home-view">
+          <div class="hero-art">
+            <div class="hero-slogan" aria-label="Your laundry. Our problem.">
+              <span>Your laundry.</span>
+              <span>Our problem.</span>
+            </div>
+            <span class="burst burst-one"></span>
+            <span class="burst burst-two"></span>
+            <span class="hero-washer"></span>
+            <span class="hero-shirt shirt-one"></span>
+            <span class="hero-shirt shirt-two"></span>
+          </div>
+
+          <div class="home-copy">
+            <p class="eyebrow">Pickup &amp; delivery · Edumetro · USJ 1</p>
+            <h1>Fresh laundry.<br /><span>Coming soon.</span></h1>
+            <p class="hero-description">Lazy Laundry is getting ready to take laundry day off your hands. We’ll be opening our first neighborhood pickup schedule soon.</p>
+          </div>
+
+          <section class="coming-soon-countdown" aria-labelledby="countdown-title">
+            <p class="eyebrow" id="countdown-title">Opening in</p>
+            <div class="countdown-grid" id="coming-soon-countdown" role="timer" aria-live="off" aria-label="Countdown to launch">
+              <div class="countdown-unit"><strong id="countdown-days">02</strong><span>Days</span></div>
+              <div class="countdown-unit"><strong id="countdown-hours">00</strong><span>Hours</span></div>
+              <div class="countdown-unit"><strong id="countdown-minutes">00</strong><span>Minutes</span></div>
+              <div class="countdown-unit"><strong id="countdown-seconds">00</strong><span>Seconds</span></div>
+            </div>
+            <p class="countdown-status" id="countdown-status">Bookings are not open yet.</p>
+          </section>
+
+          <div class="home-note">
+            <span class="status-dot"></span>
+            Serving Edumetro and USJ 1 soon
+          </div>
+        </section>
+
+        <form id="booking-form" novalidate>
+          <section class="view hidden" id="booking-view">
+          <div class="view-heading">
+            <button class="back-button" type="button" data-view-target="home-view" aria-label="Back to home">←</button>
+            <div>
+              <p class="eyebrow">Step into less laundry</p>
+              <h2>Book a pickup</h2>
+            </div>
+          </div>
+
+          <div class="prototype-notice" role="note">
+            <strong>Prototype request only</strong>
+            <span>This form does not contact the service or reserve a slot. Use fictional details only.</span>
+          </div>
+
+            <fieldset class="form-section compact-pickup-section">
+              <legend>Choose a pickup slot</legend>
+              <div class="calendar-panel">
+                <div class="calendar-panel-header">
+                  <strong>Pickup date</strong>
+                  <span>Book up to 1 week in advance</span>
+                </div>
+                <div class="calendar-grid" id="calendar-grid" aria-label="Available pickup dates"></div>
+                <input class="date-picker-input" id="pickup-date" name="pickupDate" type="date" aria-label="Selected pickup date" required />
+              </div>
+              <div class="slot-picker-panel">
+                <div class="slot-picker-header">
+                  <span class="slot-picker-title">
+                    <strong>Pickup times</strong>
+                    <small>Choose an open slot</small>
+                  </span>
+                  <span class="slot-swipe-hint" id="slot-swipe-hint" aria-hidden="true">Swipe to explore <span>→</span></span>
+                </div>
+                <div class="slot-grid" id="slot-grid" aria-label="Pickup times" aria-live="polite"></div>
+              </div>
+              <input type="hidden" id="pickup-slot" name="pickupSlot" required />
+            </fieldset>
+
+            <fieldset class="form-section">
+              <legend>Choose your package</legend>
+              <div class="choice-grid choice-grid-two">
+                <label class="choice-card">
+                  <input type="radio" name="packageSize" value="10" checked />
+                  <span class="choice-card-content">
+                    <span class="choice-card-title">10-Piece Laundry Bundle</span>
+                    <ol class="package-inclusions">
+                      <li><strong>Tops:</strong> shirts, tees, polos — 1 each</li>
+                      <li><strong>Bottoms:</strong> jeans, trousers, sweatpants — 1 each</li>
+                      <li><strong>Socks:</strong> 10 pairs included</li>
+                      <li><strong>Undergarments:</strong> 2 items count as 1 piece</li>
+                    </ol>
+                    <strong class="choice-card-price">RM34.99</strong>
+                  </span>
+                  <span class="choice-check" aria-hidden="true">✓</span>
+                </label>
+                <label class="choice-card">
+                  <input type="radio" name="packageSize" value="18" />
+                  <span class="choice-card-content">
+                    <span class="choice-card-title">18-Piece Laundry Bundle</span>
+                    <ol class="package-inclusions">
+                      <li><strong>Tops:</strong> shirts, tees, polos — 1 each</li>
+                      <li><strong>Bottoms:</strong> jeans, trousers, sweatpants — 1 each</li>
+                      <li><strong>Socks:</strong> 18 pairs included</li>
+                      <li><strong>Undergarments:</strong> 2 items count as 1 piece</li>
+                    </ol>
+                    <strong class="choice-card-price">RM59.99</strong>
+                  </span>
+                  <span class="choice-check" aria-hidden="true">✓</span>
+                </label>
+              </div>
+              <p class="form-hint">Your first five washes may qualify for our launch promotion.</p>
+            </fieldset>
+
+            <fieldset class="form-section">
+              <legend>Choose your service</legend>
+              <div class="service-list">
+                <label class="service-card">
+                  <input type="radio" name="service" value="standard" checked />
+                  <span class="service-icon service-icon-wash" aria-hidden="true"></span>
+                  <span class="service-copy">
+                    <strong>Lazy Wash</strong>
+                    <span>Standard turnaround</span>
+                  </span>
+                  <span class="service-price">Included</span>
+                  <span class="choice-check" aria-hidden="true">✓</span>
+                </label>
+                <label class="service-card">
+                  <input type="radio" name="service" value="express" />
+                  <span class="service-icon service-icon-express" aria-hidden="true"></span>
+                  <span class="service-copy">
+                    <strong>Lazy Wash Express</strong>
+                    <span>Ready in approximately 6 hours</span>
+                  </span>
+                  <span class="service-price" id="express-price">+RM10</span>
+                  <span class="choice-check" aria-hidden="true">✓</span>
+                </label>
+              </div>
+            </fieldset>
+
+            <fieldset class="form-section">
+              <legend>Included with your booking</legend>
+              <div class="addon-list">
+                <label class="service-card addon-card included-card" aria-disabled="true">
+                  <input type="checkbox" id="folding" name="folding" checked disabled />
+                  <span class="service-icon service-icon-fold" aria-hidden="true"></span>
+                  <span class="service-copy">
+                    <strong>Folding and packing</strong>
+                    <span>Folded neatly and ready to store</span>
+                  </span>
+                  <span class="service-price included-price">Included</span>
+                  <span class="choice-check" aria-hidden="true">✓</span>
+                </label>
+                <label class="service-card addon-card included-card" aria-disabled="true">
+                  <input type="checkbox" id="ironing" name="ironing" checked disabled />
+                  <span class="service-icon service-icon-iron" aria-hidden="true"></span>
+                  <span class="service-copy">
+                    <strong>Ironing</strong>
+                    <span>Pressed and ready for your wardrobe</span>
+                  </span>
+                  <span class="service-price included-price">Included</span>
+                  <span class="choice-check" aria-hidden="true">✓</span>
+                </label>
+              </div>
+            </fieldset>
+
+            <fieldset class="form-section">
+              <legend>Add-ons</legend>
+              <label class="service-card addon-card">
+                <input type="checkbox" id="hangers" name="hangers" />
+                <span class="service-icon service-icon-hanger" aria-hidden="true"></span>
+                <span class="service-copy">
+                  <strong>Return on hangers</strong>
+                  <span>Neat and ready for your wardrobe</span>
+                </span>
+                <span class="service-price" id="hanger-price">+RM3</span>
+                <span class="choice-check" aria-hidden="true">✓</span>
+              </label>
+              <p class="form-hint">Socks, undergarments, and special items will be added to the form in the next step.</p>
+            </fieldset>
+
+            <div class="price-summary" aria-live="polite">
+              <div class="price-summary-heading">
+                <span>Your total</span>
+                <strong id="total-price">RM34.99</strong>
+              </div>
+              <div class="price-breakdown" id="price-breakdown"></div>
+            </div>
+
+            <div class="form-error" id="booking-step-error" role="alert" hidden></div>
+            <button class="button button-primary button-large" id="checkout-button" type="button">
+              Continue to checkout
+              <span class="button-arrow" aria-hidden="true">→</span>
+            </button>
+          </section>
+
+          <section class="view hidden" id="checkout-view">
+            <div class="view-heading">
+              <button class="back-button" type="button" data-view-target="booking-view" data-preserve-booking="true" aria-label="Back to booking">←</button>
+              <div>
+                <p class="eyebrow">Almost there</p>
+                <h2>Checkout</h2>
+              </div>
+            </div>
+
+            <fieldset class="form-section">
+              <legend>Your details</legend>
+              <div class="field-list">
+                <label class="field-card">
+                  <span class="field-icon field-icon-name" aria-hidden="true"></span>
+                  <span class="field-card-copy">
+                    <span class="field-card-label">Full name</span>
+                    <input class="field-card-input" id="customer-name" name="name" type="text" placeholder="Your name" autocomplete="name" required />
+                  </span>
+                </label>
+                <label class="field-card field-card-phone">
+                  <span class="field-icon field-icon-phone" aria-hidden="true"></span>
+                  <span class="field-card-copy">
+                    <span class="field-card-label">WhatsApp number</span>
+                    <span class="phone-number-row">
+                      <input class="country-code-input" id="customer-country-code" name="countryCode" type="text" value="+60" inputmode="tel" maxlength="5" pattern="\+[1-9][0-9]{0,3}" autocomplete="tel-country-code" aria-label="Country calling code" required />
+                      <input class="field-card-input" id="customer-phone" name="phone" type="tel" inputmode="numeric" pattern="[0-9]{7,12}" maxlength="12" placeholder="Phone digits" autocomplete="tel-national" aria-label="Phone number digits" required />
+                    </span>
+                    <small class="phone-field-hint">Digits only; omit the leading 0.</small>
+                  </span>
+                </label>
+              </div>
+            </fieldset>
+
+            <fieldset class="form-section pickup-location-section">
+              <legend>Pickup location</legend>
+              <p class="pickup-area-note"><span>Service area</span><strong>Edumetro, USJ 1</strong></p>
+              <div class="field-list">
+                <label class="field-card">
+                  <span class="field-icon field-icon-address" aria-hidden="true"></span>
+                  <span class="field-card-copy">
+                    <span class="field-card-label">Block / building</span>
+                    <select class="field-card-input field-card-select" id="customer-block" name="block" required>
+                      <option value="" disabled selected>Choose your block</option>
+                      <option value="Block A/B">Block A/B</option>
+                      <option value="Block C">Block C</option>
+                      <option value="Block E">Block E</option>
+                      <option value="Colonial">Colonial</option>
+                    </select>
+                  </span>
+                </label>
+                <label class="field-card">
+                  <span class="field-icon field-icon-unit" aria-hidden="true"></span>
+                  <span class="field-card-copy">
+                    <span class="field-card-label">Unit number</span>
+                    <input class="field-card-input" id="customer-unit" name="unit" type="text" placeholder="e.g. 12-3" autocomplete="address-line2" required />
+                  </span>
+                </label>
+              </div>
+            </fieldset>
+
+            <div class="terms-card">
+              <label class="terms-row">
+                <input class="terms-checkbox" id="terms-accepted" name="termsAccepted" type="checkbox" required />
+                <span class="terms-box" aria-hidden="true">✓</span>
+                <span class="terms-copy">
+                  <strong>I agree to the Lazy Laundry terms</strong>
+                  <span>Terms of Service · Pickup &amp; Delivery Policy · Privacy Policy</span>
+                </span>
+              </label>
+              <details class="terms-details">
+                <summary>Review before confirming</summary>
+                <p>Final policy wording will be added before the booking system launches.</p>
+              </details>
+            </div>
+
+            <div class="form-error" id="form-error" role="alert" hidden></div>
+
+            <div class="price-summary" aria-live="polite">
+              <div class="price-summary-heading">
+                <span>Your total</span>
+                <strong id="checkout-total-price">RM34.99</strong>
+              </div>
+              <div class="price-breakdown" id="checkout-price-breakdown"></div>
+            </div>
+
+            <fieldset class="form-section payment-section">
+              <legend>Payment method</legend>
+              <div class="service-list payment-method-list">
+                <label class="service-card payment-card">
+                  <input type="radio" name="paymentMethod" value="cash" checked />
+                  <span class="service-icon service-icon-cash" aria-hidden="true"></span>
+                  <span class="service-copy">
+                    <strong>Cash</strong>
+                    <span>Pay at pickup</span>
+                  </span>
+                  <span class="choice-check" aria-hidden="true">✓</span>
+                </label>
+                <label class="service-card payment-card">
+                  <input type="radio" name="paymentMethod" value="qr" />
+                  <span class="service-icon service-icon-qr" aria-hidden="true"></span>
+                  <span class="service-copy">
+                    <strong>QR</strong>
+                    <span>Scan at pickup</span>
+                  </span>
+                  <span class="choice-check" aria-hidden="true">✓</span>
+                </label>
+              </div>
+            </fieldset>
+
+            <button class="button button-primary button-large submit-button" type="submit">
+              Save demo request
+              <span class="button-arrow" aria-hidden="true">→</span>
+            </button>
+            <p class="payment-note">No payment is taken in this local prototype.</p>
+          </section>
+        </form>
+
+        <section class="view hidden" id="operator-view" aria-labelledby="operator-title">
+          <div class="view-heading">
+            <button class="back-button" type="button" data-view-target="home-view" aria-label="Back to home">←</button>
+            <div>
+              <p class="eyebrow">Local workflow preview</p>
+              <h2 id="operator-title">Operator queue</h2>
+            </div>
+          </div>
+
+          <div class="prototype-notice operator-notice" role="note">
+            <strong>Not a private or live system</strong>
+            <span>Bookings and updates are stored in this browser only. Do not enter real customer details or use this for paid orders.</span>
+          </div>
+          <div class="form-error" id="operator-feedback" role="alert" hidden></div>
+
+          <div class="admin-summary" aria-label="Booking summary">
+            <div class="admin-stat"><strong id="operator-pending-count">0</strong><span>Awaiting confirmation</span></div>
+            <div class="admin-stat"><strong id="operator-active-count">0</strong><span>Active orders</span></div>
+            <div class="admin-stat"><strong id="operator-unpaid-count">0</strong><span>Payment due</span></div>
+          </div>
+
+          <div class="admin-toolbar">
+            <label class="admin-filter-label" for="operator-filter">Show</label>
+            <select class="admin-filter" id="operator-filter">
+              <option value="all">All bookings</option>
+              <option value="pending">Awaiting confirmation</option>
+              <option value="active">Active orders</option>
+              <option value="completed">Delivered</option>
+              <option value="cancelled">Cancelled</option>
+            </select>
+            <button class="admin-refresh" type="button" id="operator-refresh" aria-label="Refresh bookings">↻</button>
+          </div>
+
+          <div class="admin-booking-list" id="operator-booking-list" aria-live="polite"></div>
+          <div class="admin-empty" id="operator-empty" hidden>
+            <strong>No bookings in this view</strong>
+            <span>Local demo requests created in this browser will appear here.</span>
+          </div>
+          <section class="admin-detail" id="operator-detail" aria-live="polite" hidden></section>
+        </section>
+
+        <section class="view hidden" id="tracking-view">
+          <div class="view-heading">
+            <button class="back-button" type="button" data-view-target="home-view" aria-label="Back to home">←</button>
+            <div>
+              <p class="eyebrow">Keep an eye on your laundry</p>
+              <h2>Track an order</h2>
+            </div>
+          </div>
+          <div class="tracking-card">
+            <p class="tracking-intro">Enter a demo request number from this browser. Status updates are local and are not sent to customers.</p>
+            <label class="field-label" for="tracking-number">Booking number</label>
+            <input class="text-input" id="tracking-number" type="text" placeholder="e.g. LL-4821" autocomplete="off" />
+            <button class="button button-primary button-large" type="button" id="track-button">Find my order</button>
+            <div class="form-error" id="tracking-error" role="alert" hidden></div>
+            <div id="tracking-result" hidden></div>
+          </div>
+        </section>
+
+        <section class="view hidden" id="confirmation-view">
+          <div class="confirmation-card">
+            <div class="confirmation-mark" aria-hidden="true">✓</div>
+            <p class="eyebrow">Local demo request</p>
+            <h2>Request saved.</h2>
+            <p class="confirmation-copy">This request is stored only in this browser. It has not been sent to an operator, confirmed, or reserved.</p>
+            <div class="booking-number-card">
+              <span>Booking number</span>
+              <strong id="confirmation-number">LL-0000</strong>
+            </div>
+            <div class="confirmation-details" id="confirmation-details"></div>
+            <button class="button button-primary button-large" type="button" data-view-target="tracking-view">View local status</button>
+            <button class="text-button" type="button" data-view-target="home-view">Back to home</button>
+          </div>
+        </section>
+      </main>
+
+      <footer class="site-footer">
+        <span>LAZY LAUNDRY</span>
+        <span>Coming soon to Edumetro and USJ 1.</span>
+      </footer>
+    </div>
+    <script type="module" src="modules/coming-soon.js"></script>
+  </body>
+</html>
