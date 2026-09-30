@@ -4,14 +4,14 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#f8d21c" />
-    <meta name="description" content="Lazy Laundry pickup and delivery is coming soon to Edumetro and USJ 1." />
-    <title>Lazy Laundry — Coming Soon</title>
-    <link rel="stylesheet" href="styles.css" />
+    <meta name="description" content="Lazy Laundry booking demo for pickup and delivery in Edumetro and USJ 1." />
+    <title>Lazy Laundry — Booking Demo</title>
+    <link rel="stylesheet" href="../shared/styles.css" />
   </head>
   <body>
     <div class="app-shell">
       <header class="site-header">
-        <a class="brand" href="./" aria-label="Lazy Laundry home">
+        <a class="brand" href="/" aria-label="Lazy Laundry home">
           <span class="brand-script">Lazy</span>
           <span class="brand-name">LAUNDRY</span>
         </a>
@@ -19,7 +19,7 @@
       </header>
 
       <main>
-        <section class="view home-view coming-soon-view" id="home-view">
+        <section class="view home-view" id="home-view">
           <div class="hero-art">
             <div class="hero-slogan" aria-label="Your laundry. Our problem.">
               <span>Your laundry.</span>
@@ -33,25 +33,29 @@
           </div>
 
           <div class="home-copy">
-            <p class="eyebrow">Pickup &amp; delivery · Edumetro · USJ 1</p>
-            <h1>Fresh laundry.<br /><span>Coming soon.</span></h1>
-            <p class="hero-description">Lazy Laundry is getting ready to take laundry day off your hands. We’ll be opening our first neighborhood pickup schedule soon.</p>
+            <p class="eyebrow">Premium laundry care, without the work.</p>
+            <p class="hero-description">We collect the pile, wash it, dry it, iron it, and bring it back ready for your wardrobe.</p>
           </div>
 
-          <section class="coming-soon-countdown" aria-labelledby="countdown-title">
-            <p class="eyebrow" id="countdown-title">Opening in</p>
-            <div class="countdown-grid" id="coming-soon-countdown" role="timer" aria-live="off" aria-label="Countdown to launch">
-              <div class="countdown-unit"><strong id="countdown-days">02</strong><span>Days</span></div>
-              <div class="countdown-unit"><strong id="countdown-hours">00</strong><span>Hours</span></div>
-              <div class="countdown-unit"><strong id="countdown-minutes">00</strong><span>Minutes</span></div>
-              <div class="countdown-unit"><strong id="countdown-seconds">00</strong><span>Seconds</span></div>
-            </div>
-            <p class="countdown-status" id="countdown-status">Bookings are not open yet.</p>
-          </section>
+          <div class="home-actions">
+            <button class="button button-primary button-large" type="button" data-view-target="booking-view">
+              Make a booking
+              <span class="button-arrow" aria-hidden="true">→</span>
+            </button>
+            <button class="button button-secondary button-large" type="button" data-view-target="tracking-view">
+              Track an order
+              <span class="button-arrow" aria-hidden="true">→</span>
+            </button>
+          </div>
+
+          <div class="prototype-notice" role="note">
+            <strong>Prototype request only</strong>
+            <span>This is a demo flow stored in this browser only. It does not send a booking to Lazy Laundry or reserve a pickup slot.</span>
+          </div>
 
           <div class="home-note">
             <span class="status-dot"></span>
-            Serving Edumetro and USJ 1 soon
+            Pickup slots available in Edumetro, USJ 1
           </div>
         </section>
 
@@ -405,9 +409,9 @@
 
       <footer class="site-footer">
         <span>LAZY LAUNDRY</span>
-        <span>Coming soon to Edumetro and USJ 1.</span>
+        <span>Prototype booking flow — requests are not sent.</span>
       </footer>
     </div>
-    <script type="module" src="modules/coming-soon.js"></script>
+    <script type="module" src="./app.js"></script>
   </body>
 </html>

@@ -1295,73 +1295,75 @@ h1 span {
 }
 
 .slot-picker-panel {
-  margin-top: 8px;
+  margin-top: 12px;
   overflow: hidden;
   border: 2px solid var(--ink);
-  border-radius: 14px;
+  border-radius: 16px;
   background: var(--cream);
-  box-shadow: 3px 3px 0 var(--ink);
+  box-shadow: 4px 4px 0 var(--ink);
 }
 
 .slot-picker-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 10px;
   border-bottom: 2px solid var(--ink);
-  padding: 9px 11px;
+  padding: 13px 15px;
   background: var(--yellow);
 }
 
 .slot-picker-title {
   display: grid;
-  gap: 2px;
+  gap: 4px;
 }
 
 .slot-picker-title strong {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 950;
 }
 
 .slot-picker-title small {
   color: var(--muted);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 750;
 }
 
 .slot-swipe-hint {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  border: 1px solid rgba(23, 23, 23, 0.35);
+  gap: 6px;
+  border: 1px solid rgba(23, 23, 23, 0.28);
   border-radius: 999px;
-  padding: 5px 7px;
+  padding: 6px 9px;
   color: var(--ink);
-  background: rgba(255, 255, 255, 0.72);
-  font-size: 8px;
+  background: rgba(255, 255, 255, 0.78);
+  font-size: 9px;
   font-weight: 850;
   white-space: nowrap;
 }
 
 .slot-swipe-hint span {
-  font-size: 12px;
+  font-size: 13px;
   line-height: 0.8;
 }
 
 .slot-grid {
   display: flex;
-  gap: 6px;
+  align-items: stretch;
+  gap: 10px;
   overflow-x: auto;
   overflow-y: hidden;
   overscroll-behavior-x: contain;
-  padding: 10px 10px 8px;
+  padding: 14px 12px 16px;
   scrollbar-color: var(--yellow-deep) rgba(23, 23, 23, 0.1);
   scrollbar-width: thin;
+  scroll-snap-type: x proximity;
   -webkit-overflow-scrolling: touch;
 }
 
 .slot-grid::-webkit-scrollbar {
-  height: 8px;
+  height: 7px;
 }
 
 .slot-grid::-webkit-scrollbar-track {
@@ -1394,80 +1396,94 @@ h1 span {
 .slot-button {
   display: grid;
   min-width: 0;
-  flex: 0 0 60px;
-  min-height: 50px;
-  gap: 3px;
+  flex: 0 0 clamp(78px, 22vw, 88px);
+  min-height: 68px;
+  gap: 5px;
   place-content: center;
-  border: 2px solid var(--ink);
-  border-radius: 11px;
-  padding: 5px 3px;
+  border: 1px solid rgba(23, 23, 23, 0.2);
+  border-radius: 14px;
+  padding: 9px 8px;
   color: #1f6e3d;
-  background: #dff4e5;
-  box-shadow: 2px 2px 0 var(--ink);
+  background: #eef8f0;
+  box-shadow: 0 3px 9px rgba(23, 23, 23, 0.08);
   font-size: 12px;
   font-weight: 850;
+  scroll-snap-align: start;
+  transition: transform 140ms ease, box-shadow 140ms ease, background-color 140ms ease, border-color 140ms ease;
 }
 
 .slot-button strong {
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 950;
   white-space: nowrap;
 }
 
 .slot-button small {
-  font-size: 8px;
+  font-size: 9px;
   font-weight: 900;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.03em;
   text-transform: uppercase;
   white-space: nowrap;
 }
 
 .slot-evening-jump {
   display: grid;
-  min-height: 50px;
-  flex: 0 0 60px;
+  min-height: 68px;
+  flex: 0 0 clamp(78px, 22vw, 88px);
   align-content: center;
   justify-items: center;
-  gap: 4px;
-  border: 2px solid var(--ink);
-  border-radius: 11px;
-  padding: 5px 4px;
+  gap: 5px;
+  border: 1px solid rgba(23, 23, 23, 0.18);
+  border-radius: 14px;
+  padding: 9px 8px;
   color: var(--ink);
-  background: var(--yellow);
-  box-shadow: 2px 2px 0 var(--ink);
+  background: #fff4c7;
+  box-shadow: 0 3px 9px rgba(23, 23, 23, 0.08);
   text-align: center;
+  scroll-snap-align: start;
   transition: transform 140ms ease, box-shadow 140ms ease;
 }
 
 .slot-evening-jump:hover {
-  transform: translate(-1px, -1px);
-  box-shadow: 3px 3px 0 var(--ink);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 12px rgba(23, 23, 23, 0.14);
 }
 
 .slot-evening-jump strong {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 950;
   white-space: nowrap;
 }
 
 .slot-evening-jump small {
-  font-size: 8px;
+  font-size: 9px;
   font-weight: 900;
   white-space: nowrap;
 }
 
 .slot-button.open:hover,
 .slot-button.open.selected {
+  border-color: #247747;
   color: var(--white);
   background: #2f9d59;
-  box-shadow: 2px 2px 0 var(--ink);
+}
+
+.slot-button.open:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 12px rgba(47, 157, 89, 0.22);
+}
+
+.slot-button.open.selected {
+  box-shadow: 0 0 0 3px rgba(47, 157, 89, 0.18);
 }
 
 .slot-button.booked,
 .slot-button.expired {
   cursor: not-allowed;
+  border-color: #efc2bf;
   color: var(--red-deep);
-  background: #ffdedd;
+  background: #fff1ef;
+  box-shadow: none;
 }
 
 .slot-button.booked small,
@@ -1477,13 +1493,14 @@ h1 span {
 
 .slot-button.coming-soon {
   cursor: not-allowed;
-  border-color: #c9c4ba;
-  color: #726d65;
-  background: #e8e5df;
+  border-color: rgba(23, 23, 23, 0.12);
+  color: #817c73;
+  background: #f0eee8;
+  box-shadow: none;
 }
 
 .slot-button.coming-soon small {
-  color: #726d65;
+  color: #817c73;
 }
 
 .checkout-summary {
