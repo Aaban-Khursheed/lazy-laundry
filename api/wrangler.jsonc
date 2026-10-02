@@ -1,0 +1,26 @@
+{
+	"name": "lazy-laundry-api",
+	"main": "./worker.js",
+	"compatibility_date": "2026-09-18",
+	"observability": {
+		"enabled": true,
+		"logs": {
+			"enabled": true,
+			"head_sampling_rate": 1
+		},
+		"traces": {
+			"enabled": true,
+			"head_sampling_rate": 0.05
+		}
+	},
+	"vars": {
+		"PUBLIC_BOOKING_ENABLED": "false"
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "lazy-laundry-staging",
+			"database_id": "5ff59f01-8298-4860-b957-0e259b58ccc9"
+		}
+	]
+}
