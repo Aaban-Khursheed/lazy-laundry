@@ -31,10 +31,15 @@
     "OPERATOR_ALLOWED_EMAILS": "25087560@imail.sunway.edu.my",
     "SERVICE_TIMEZONE": "Asia/Kuala_Lumpur"
   },
+  "routes": [
+    { "pattern": "lazylaundry.me", "custom_domain": true },
+    { "pattern": "www.lazylaundry.me", "custom_domain": true },
+    { "pattern": "ops.lazylaundry.me", "custom_domain": true }
+  ],
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "lazy-laundry-production",
+      "database_name": "lazylaundry-db",
       "database_id": "5c0ae934-9fb6-4ed9-ae9d-79353b8f1714",
       "migrations_dir": "api/migrations"
     }
