@@ -296,7 +296,69 @@ function priceInCents(packageSize, service, hangers) {
   return base + (service === "express" ? express : 0) + (hangers ? 0 : 0);
 }
 
-const BOOKING_FIELDS = new Set(["name", "phone", "block", "unit", "packageSize", "service", "hangers", "pickupDate", "pickupSlot", "paymentMethod", "termsAccepted", "priceRevision", "expectedTotalCents"]);
+const PROMO_CODE_PATTERN = /^[A-Z0-9]{3,32}$/;
+const PROMO_VALUE_LIMITS = { percent: { min: 1, max: 90 }, fixed: { min: 100, max: 50000 } };
+const PROMO_PROBLEM_MESSAGES = {
+  unknown: "That code is not valid",
+  inactive: "That code is not valid",
+  not_started: "That code is not active yet",
+  expired: "That code has expired",
+  below_minimum: "This order does not meet the code minimum",
+  exhausted: "That code has no remaining uses",
+};
+
+function normalizePromoCode(value) {
+  const code = typeof value === "string" ? value.trim().toUpperCase() : "";
+  return PROMO_CODE_PATTERN.test(code) ? code : "";
+}
+
+async function promoForCode(env, code) {
+  return env.DB.prepare("SELECT * FROM promotions WHERE code = ?").bind(code).first();
+}
+
+function promoEligibility(promo, serviceTotalCents, { forRedemption = false } = {}) {
+  if (!promo) return "unknown";
+  if (promo.active !== 1) return "inactive";
+  const now = new Date().toISOString();
+  if (promo.starts_at && promo.starts_at > now) return "not_started";
+  if (promo.ends_at && promo.ends_at < now) return "expired";
+  if (serviceTotalCents < promo.min_service_cents) return "below_minimum";
+  if (forRedemption && promo.max_redemptions !== null && promo.redemptions >= promo.max_redemptions) return "exhausted";
+  return null;
+}
+
+function promoDiscountCents(promo, serviceTotalCents) {
+  const raw = promo.kind === "percent"
+    ? Math.floor((serviceTotalCents * Math.min(promo.value, PROMO_VALUE_LIMITS.percent.max)) / 100)
+    : promo.value;
+  return Math.max(0, Math.min(serviceTotalCents, raw));
+}
+
+function discountForStoredPromo(promo, serviceTotalCents) {
+  if (!promo || promo.active !== true) return 0;
+  const now = new Date().toISOString();
+  if ((promo.startsAt && promo.startsAt > now) || (promo.endsAt && promo.endsAt < now)) return 0;
+  if (serviceTotalCents < Math.round((promo.minService || 0) * 100)) return 0;
+  const raw = promo.kind === "percent"
+    ? Math.floor((serviceTotalCents * Math.min(promo.value, PROMO_VALUE_LIMITS.percent.max)) / 100)
+    : Math.round(promo.value * 100);
+  return Math.max(0, Math.min(serviceTotalCents, raw));
+}
+
+function promoFromRow(row) {
+  if (!row?.promo_kind) return null;
+  return {
+    code: row.promo_code,
+    kind: row.promo_kind,
+    value: row.promo_kind === "fixed" ? row.promo_value / 100 : row.promo_value,
+    minService: row.promo_min_service_cents / 100,
+    active: row.promo_active === 1,
+    startsAt: row.promo_starts_at,
+    endsAt: row.promo_ends_at,
+  };
+}
+
+const BOOKING_FIELDS = new Set(["name", "phone", "block", "unit", "packageSize", "service", "hangers", "pickupDate", "pickupSlot", "paymentMethod", "promoCode", "termsAccepted", "priceRevision", "expectedTotalCents"]);
 
 function validateBooking(input) {
   if (!input || typeof input !== "object" || Array.isArray(input)) return null;
@@ -311,6 +373,7 @@ function validateBooking(input) {
   const hangers = input.hangers === true;
   const pickupDate = input.pickupDate;
   const pickupSlot = input.pickupSlot;
+  const promoCode = input.promoCode === undefined ? "" : normalizePromoCode(input.promoCode);
 
   if (!name || name.length > 120 || !/^\+[1-9]\d{6,14}$/.test(phone)) return null;
   if (!BLOCKS.has(block) || !/^[A-Z]-\d{1,2}-\d{1,3}$/i.test(unit)) return null;
@@ -334,6 +397,7 @@ function validateBooking(input) {
     pickupDate,
     pickupSlot,
     paymentMethod,
+    promoCode,
     priceRevision,
     expectedTotalCents,
     serviceTotalCents: priceInCents(packageSize, service, hangers),
@@ -423,6 +487,9 @@ function bookingForClient(row, operator = false) {
     pickupSlot: row.pickup_slot,
     serviceTotal: row.service_total_cents / 100,
     feeTotal: row.fee_total_cents / 100,
+    discount: Number(row.discount_cents || 0) / 100,
+    promoCode: row.promo_code || null,
+    promo: promoFromRow(row),
     total: row.total_cents / 100,
     paymentMethod: row.payment_method,
     paymentStatus: row.payment_status,
@@ -498,7 +565,11 @@ async function createBooking(request, env, cors) {
   if (!encryptedTrackingToken) {
     return jsonResponse({ error: "Booking security is not configured" }, 503, cors);
   }
-  const totalCents = booking.serviceTotalCents + feeTotalCents;
+  const promo = booking.promoCode ? await promoForCode(env, booking.promoCode) : null;
+  const promoProblem = promo ? promoEligibility(promo, booking.serviceTotalCents, { forRedemption: true }) : null;
+  const appliedPromo = promo && !promoProblem ? promo : null;
+  const discountCents = appliedPromo ? promoDiscountCents(appliedPromo, booking.serviceTotalCents) : 0;
+  const totalCents = booking.serviceTotalCents - discountCents + feeTotalCents;
   const currentPriceRevision = env.PRICE_REVISION || "launch-v1";
   if (booking.priceRevision && booking.priceRevision !== currentPriceRevision) {
     return jsonResponse({ error: "The price has changed; refresh checkout", code: "quote_changed" }, 409, cors);
@@ -521,19 +592,31 @@ async function createBooking(request, env, cors) {
       id, booking_number, tracking_token_hash, encrypted_tracking_token, tracking_token_key_version,
       idempotency_key_hash, request_payload_hash, customer_id, customer_name, phone, block, unit,
       package_size, service, folding, ironing, hangers, pickup_date, pickup_slot,
-      service_total_cents, fee_total_cents, total_cents, payment_method, status, ready_at,
-      revision, terms_accepted, terms_accepted_at, terms_policy_version, created_at, updated_at
+      service_total_cents, fee_total_cents, total_cents, payment_method, promo_code, discount_cents,
+      status, ready_at, revision, terms_accepted, terms_accepted_at, terms_policy_version, created_at, updated_at
     )
-    SELECT ?, ?, ?, ?, 'v1', ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, 1, 1, ?, ?, ?, ?
-    WHERE ? = 0 OR changes() = 1
+    SELECT ?, ?, ?, ?, 'v1', ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, 1, 1, ?, ?, ?, ?
+    WHERE (? = 0 OR changes() = 1)
+      AND (? IS NULL OR EXISTS (
+        SELECT 1 FROM promotions WHERE code = ? AND active = 1
+          AND (max_redemptions IS NULL OR redemptions < max_redemptions)
+      ))
   `).bind(
     id, bookingNumber, trackingTokenHash, encryptedTrackingToken, keyHash, payloadHash, customerId,
     booking.name, booking.phone, booking.block, booking.unit, booking.packageSize, booking.service,
     booking.hangers ? 1 : 0, booking.pickupDate, booking.pickupSlot, booking.serviceTotalCents,
-    feeTotalCents, totalCents, booking.paymentMethod, booking.readyAt, createdAt,
-    env.TERMS_POLICY_VERSION || "launch-v1", createdAt, createdAt, feeTotalCents
+    feeTotalCents, totalCents, booking.paymentMethod, appliedPromo?.code || null, discountCents,
+    booking.readyAt, createdAt, env.TERMS_POLICY_VERSION || "launch-v1", createdAt, createdAt,
+    feeTotalCents, appliedPromo?.code || null, appliedPromo?.code || null
   );
   statements.push(bookingStatement);
+  const bookingResultIndex = statements.length - 1;
+  if (appliedPromo) {
+    statements.push(env.DB.prepare(`
+      UPDATE promotions SET redemptions = redemptions + 1, updated_at = ?
+      WHERE code = ? AND active = 1 AND (max_redemptions IS NULL OR redemptions < max_redemptions)
+    `).bind(createdAt, appliedPromo.code));
+  }
   if (feeTotalCents > 0) {
     statements.push(env.DB.prepare(`
       UPDATE penalty_events SET state = 'allocated', allocated_booking_id = ?, updated_at = ?
@@ -552,10 +635,14 @@ async function createBooking(request, env, cors) {
   `).bind(auditId, id, customerId, JSON.stringify({ feeTotalCents }), createdAt, id));
   try {
     const results = await env.DB.batch(statements);
-    const bookingResult = results[feeTotalCents > 0 ? 2 : 1];
+    const bookingResult = results[bookingResultIndex];
     if (bookingResult?.meta?.changes !== 1) {
+      if (appliedPromo) return jsonResponse({ error: "That promo code is no longer available", code: "quote_changed" }, 409, cors);
       if (feeTotalCents > 0) return jsonResponse({ error: "The fee balance changed; refresh checkout and try again" }, 409, cors);
       throw new Error("Booking insert did not change a row");
+    }
+    if (appliedPromo && results[bookingResultIndex + 1]?.meta?.changes !== 1) {
+      console.error(JSON.stringify({ event: "promo_redemption_guard_mismatch", bookingId: id, code: appliedPromo.code }));
     }
     const row = await env.DB.prepare("SELECT * FROM bookings WHERE id = ?").bind(id).first();
     return jsonResponse({ booking: bookingForClient(row), trackingToken }, 201, cors);
@@ -588,7 +675,7 @@ async function estimateBooking(request, env, cors) {
     return jsonResponse({ error: "Verification failed" }, 403, cors);
   }
   const input = await readJson(request);
-  const allowedFields = new Set(["phone", "packageSize", "service", "hangers"]);
+  const allowedFields = new Set(["phone", "packageSize", "service", "hangers", "promoCode"]);
   if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).some((key) => !allowedFields.has(key))) {
     return jsonResponse({ error: "Estimate details are invalid" }, 400, cors);
   }
@@ -603,16 +690,27 @@ async function estimateBooking(request, env, cors) {
   const customerId = customerIdForPhone(phone);
   const customer = await env.DB.prepare("SELECT penalty_balance_cents FROM customers WHERE id = ?").bind(customerId).first();
   const feeTotalCents = Number(customer?.penalty_balance_cents) || 0;
+  const promoCode = normalizePromoCode(input.promoCode);
+  const promoRequested = input.promoCode !== undefined && String(input.promoCode).trim() !== "";
+  const promo = promoCode ? await promoForCode(env, promoCode) : null;
+  const promoProblem = promo ? promoEligibility(promo, serviceTotalCents, { forRedemption: true }) : (promoRequested ? "unknown" : null);
+  const discountCents = promo && !promoProblem ? promoDiscountCents(promo, serviceTotalCents) : 0;
   return jsonResponse({
     currency: "MYR",
     revision: env.PRICE_REVISION || "launch-v1",
     lines: [
       { key: "service", label: `${packageSize}-piece ${SERVICE_LABELS[service]}`, amount: serviceTotalCents / 100 },
+      ...(discountCents > 0 ? [{ key: "promo", label: `Promo ${promo.code}`, amount: -discountCents / 100 }] : []),
       ...(feeTotalCents > 0 ? [{ key: "penalty", label: "Outstanding service fee", amount: feeTotalCents / 100 }] : []),
     ],
     serviceTotal: serviceTotalCents / 100,
     feeTotal: feeTotalCents / 100,
-    total: (serviceTotalCents + feeTotalCents) / 100,
+    promo: promoRequested ? {
+      code: promoCode || String(input.promoCode).trim().toUpperCase().slice(0, 40),
+      applied: discountCents > 0,
+      ...(discountCents > 0 ? { discount: discountCents / 100 } : { message: PROMO_PROBLEM_MESSAGES[promoProblem] || PROMO_PROBLEM_MESSAGES.unknown }),
+    } : null,
+    total: (serviceTotalCents - discountCents + feeTotalCents) / 100,
   }, 200, cors);
 }
 
@@ -641,7 +739,7 @@ async function getTracking(request, env, cors) {
   const tokenHash = await sha256(token);
   const row = await env.DB.prepare(`
     SELECT booking_number, package_size, service, pickup_date, pickup_slot, service_total_cents,
-      fee_total_cents, total_cents, ready_at, status, cancellation_reason, payment_status
+      fee_total_cents, discount_cents, promo_code, total_cents, ready_at, status, cancellation_reason, payment_status
     FROM bookings WHERE booking_number = ? AND tracking_token_hash = ?
   `).bind(number, tokenHash).first();
   if (!row) return jsonResponse({ error: "Request not found" }, 404, cors);
@@ -655,6 +753,8 @@ async function getTracking(request, env, cors) {
     pickupSlot: row.pickup_slot,
     serviceTotal: row.service_total_cents / 100,
     feeTotal: row.fee_total_cents / 100,
+    discount: Number(row.discount_cents || 0) / 100,
+    promoCode: row.promo_code || null,
     total: row.total_cents / 100,
     readyAt: row.ready_at,
     readyTime: formatReadyTime(row.ready_at),
@@ -674,7 +774,12 @@ async function customerBookingFromRequest(request, env) {
   const phone = typeof input?.phone === "string" ? input.phone.trim() : "";
   if (!/^LL-[A-F0-9]{8}$/.test(number) || !/^[A-Za-z0-9_-]{43}$/.test(token) || !/^\+[1-9]\d{6,14}$/.test(phone)) return null;
   const tokenHash = await sha256(token);
-  return env.DB.prepare("SELECT * FROM bookings WHERE booking_number = ? AND tracking_token_hash = ? AND phone = ?").bind(number, tokenHash, phone).first();
+  return env.DB.prepare(`
+    SELECT b.*, p.kind AS promo_kind, p.value AS promo_value, p.min_service_cents AS promo_min_service_cents,
+      p.active AS promo_active, p.starts_at AS promo_starts_at, p.ends_at AS promo_ends_at
+    FROM bookings b LEFT JOIN promotions p ON p.code = b.promo_code
+    WHERE b.booking_number = ? AND b.tracking_token_hash = ? AND b.phone = ?
+  `).bind(number, tokenHash, phone).first();
 }
 
 function pickupStartAt(dateString, slot) {
@@ -815,6 +920,9 @@ function customerEditView(row, late) {
     pickupSlot: row.pickup_slot,
     serviceTotal: row.service_total_cents / 100,
     feeTotal: row.fee_total_cents / 100,
+    discount: Number(row.discount_cents || 0) / 100,
+    promoCode: row.promo_code || null,
+    promo: promoFromRow(row),
     total: row.total_cents / 100,
     readyAt: row.ready_at,
     readyTime: formatReadyTime(row.ready_at),
@@ -873,7 +981,8 @@ async function editCustomerBooking(request, env, cors) {
   };
   if (serviceChanged) {
     columns.service_total_cents = priceInCents(merged.packageSize, merged.service, merged.hangers);
-    columns.total_cents = columns.service_total_cents + (Number(current.fee_total_cents) || 0);
+    columns.discount_cents = discountForStoredPromo(promoFromRow(current), columns.service_total_cents);
+    columns.total_cents = columns.service_total_cents - columns.discount_cents + (Number(current.fee_total_cents) || 0);
   }
   if (merged.service !== current.service) {
     columns.ready_at = readyAtFor(current.pickup_date, current.pickup_slot, merged.service);
@@ -913,7 +1022,11 @@ async function editCustomerBooking(request, env, cors) {
       `).bind(crypto.randomUUID(), current.id, current.customer_id, JSON.stringify({ changes }), now, eventId, current.id),
     ]);
     if (results[0]?.meta?.changes !== 1) return jsonResponse({ error: "Booking changed; refresh and try again" }, 409, cors);
-    const row = await env.DB.prepare("SELECT * FROM bookings WHERE id = ?").bind(current.id).first();
+    const row = await env.DB.prepare(`
+      SELECT b.*, p.kind AS promo_kind, p.value AS promo_value, p.min_service_cents AS promo_min_service_cents,
+        p.active AS promo_active, p.starts_at AS promo_starts_at, p.ends_at AS promo_ends_at
+      FROM bookings b LEFT JOIN promotions p ON p.code = b.promo_code WHERE b.id = ?
+    `).bind(current.id).first();
     return jsonResponse({ booking: customerEditView(row) }, 200, cors);
   } catch (error) {
     console.error(JSON.stringify({ event: "customer_edit_failed", errorType: error instanceof Error ? error.name : "unknown" }));
@@ -927,7 +1040,12 @@ async function customerBookingFromInput(input, env) {
   const phone = typeof input?.phone === "string" ? input.phone.trim() : "";
   if (!/^LL-[A-F0-9]{8}$/.test(number) || !/^[A-Za-z0-9_-]{43}$/.test(token) || !/^\+[1-9]\d{6,14}$/.test(phone)) return null;
   const tokenHash = await sha256(token);
-  return env.DB.prepare("SELECT * FROM bookings WHERE booking_number = ? AND tracking_token_hash = ? AND phone = ?").bind(number, tokenHash, phone).first();
+  return env.DB.prepare(`
+    SELECT b.*, p.kind AS promo_kind, p.value AS promo_value, p.min_service_cents AS promo_min_service_cents,
+      p.active AS promo_active, p.starts_at AS promo_starts_at, p.ends_at AS promo_ends_at
+    FROM bookings b LEFT JOIN promotions p ON p.code = b.promo_code
+    WHERE b.booking_number = ? AND b.tracking_token_hash = ? AND b.phone = ?
+  `).bind(number, tokenHash, phone).first();
 }
 
 function decodeBase64Url(value) {
@@ -1117,7 +1235,11 @@ async function getOperatorBookings(request, env, cors) {
 }
 
 async function getOperatorBooking(env, id, cors) {
-  const row = await env.DB.prepare("SELECT * FROM bookings WHERE id = ?").bind(id).first();
+  const row = await env.DB.prepare(`
+    SELECT b.*, p.kind AS promo_kind, p.value AS promo_value, p.min_service_cents AS promo_min_service_cents,
+      p.active AS promo_active, p.starts_at AS promo_starts_at, p.ends_at AS promo_ends_at
+    FROM bookings b LEFT JOIN promotions p ON p.code = b.promo_code WHERE b.id = ?
+  `).bind(id).first();
   if (!row) return jsonResponse({ error: "Booking not found" }, 404, cors);
   const [events, notes, penalties] = await Promise.all([
     env.DB.prepare(`
@@ -1213,7 +1335,11 @@ async function updateOperatorBooking(request, env, id, actor, cors) {
   if (!input || !actions.includes(input.action) || !Number.isSafeInteger(input.revision) || input.revision < 1) {
     return jsonResponse({ error: "Invalid update" }, 400, cors);
   }
-  const current = await env.DB.prepare("SELECT * FROM bookings WHERE id = ?").bind(id).first();
+  const current = await env.DB.prepare(`
+    SELECT b.*, p.kind AS promo_kind, p.value AS promo_value, p.min_service_cents AS promo_min_service_cents,
+      p.active AS promo_active, p.starts_at AS promo_starts_at, p.ends_at AS promo_ends_at
+    FROM bookings b LEFT JOIN promotions p ON p.code = b.promo_code WHERE b.id = ?
+  `).bind(id).first();
   if (!current) return jsonResponse({ error: "Booking not found" }, 404, cors);
   if (input.revision !== current.revision) {
     return jsonResponse({ error: "Booking changed; refresh and try again" }, 409, cors);
@@ -1362,7 +1488,8 @@ async function updateOperatorBooking(request, env, id, actor, cors) {
     };
     if (serviceChanged) {
       columns.service_total_cents = serviceTotalCents;
-      columns.total_cents = serviceTotalCents + (Number(current.fee_total_cents) || 0);
+      columns.discount_cents = discountForStoredPromo(promoFromRow(current), serviceTotalCents);
+      columns.total_cents = serviceTotalCents - columns.discount_cents + (Number(current.fee_total_cents) || 0);
     }
     if (slotChanged || merged.service !== current.service) {
       columns.ready_at = readyAtFor(merged.pickupDate, merged.pickupSlot, merged.service);
@@ -1608,6 +1735,192 @@ async function operatorTrackingTokenAction(request, env, id, actor, action, cors
   }
 }
 
+const PROMO_FIELDS = new Set(["code", "description", "kind", "value", "minService", "maxRedemptions", "active", "startsAt", "endsAt"]);
+
+function promoInput(input, { partial = false } = {}) {
+  if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).some((key) => !PROMO_FIELDS.has(key))) return null;
+  const has = (key) => input[key] !== undefined;
+  const fields = {};
+  if (has("code")) {
+    const code = normalizePromoCode(input.code);
+    if (!code) return null;
+    fields.code = code;
+  }
+  if (has("kind")) {
+    if (!["percent", "fixed"].includes(input.kind)) return null;
+    fields.kind = input.kind;
+  }
+  if (has("value")) {
+    const value = Number(input.value);
+    if (!Number.isFinite(value) || value <= 0) return null;
+    fields.value = value;
+  }
+  if (has("minService")) {
+    const value = Number(input.minService);
+    if (!Number.isFinite(value) || value < 0 || value > 500) return null;
+    fields.minServiceCents = Math.round(value * 100);
+  }
+  if (has("maxRedemptions")) {
+    const value = input.maxRedemptions;
+    if (value === null || value === "") fields.maxRedemptions = null;
+    else if (!Number.isInteger(Number(value)) || Number(value) < 1 || Number(value) > 100000) return null;
+    else fields.maxRedemptions = Number(value);
+  }
+  if (has("active")) fields.active = input.active === true ? 1 : 0;
+  if (has("description")) {
+    if (typeof input.description !== "string" || input.description.length > 200) return null;
+    fields.description = input.description.trim();
+  }
+  for (const key of ["startsAt", "endsAt"]) {
+    if (!has(key)) continue;
+    const value = input[key];
+    const column = key === "startsAt" ? "starts_at" : "ends_at";
+    if (value === null || value === "") {
+      fields[column] = null;
+      continue;
+    }
+    const ms = Date.parse(typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value) ? `${value}:00+08:00` : value);
+    if (!Number.isFinite(ms)) return null;
+    fields[column] = new Date(ms).toISOString();
+  }
+  if (!partial && (!fields.code || !fields.kind || fields.value === undefined)) return null;
+  if (fields.starts_at && fields.ends_at && fields.starts_at >= fields.ends_at) return null;
+  return fields;
+}
+
+function promoStoredValue(kind, value) {
+  const stored = kind === "fixed" ? Math.round(value * 100) : Math.round(value);
+  const limits = PROMO_VALUE_LIMITS[kind];
+  return Number.isInteger(stored) && stored >= limits.min && stored <= limits.max ? stored : null;
+}
+
+function promoForOperator(row) {
+  return {
+    id: row.id,
+    code: row.code,
+    description: row.description,
+    kind: row.kind,
+    value: row.kind === "fixed" ? row.value / 100 : row.value,
+    minService: row.min_service_cents / 100,
+    maxRedemptions: row.max_redemptions,
+    redemptions: row.redemptions,
+    active: row.active === 1,
+    startsAt: row.starts_at,
+    endsAt: row.ends_at,
+    revision: row.revision,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    createdBy: row.created_by,
+    updatedBy: row.updated_by,
+  };
+}
+
+async function getOperatorPromotions(env, cors) {
+  const result = await env.DB.prepare("SELECT * FROM promotions ORDER BY created_at DESC, code LIMIT 100").all();
+  return jsonResponse({ promotions: result.results.map(promoForOperator) }, 200, cors);
+}
+
+async function createOperatorPromotion(request, env, actor, cors) {
+  const input = await readJson(request);
+  const fields = promoInput(input);
+  if (!fields) return jsonResponse({ error: "Invalid promotion" }, 400, cors);
+  const stored = promoStoredValue(fields.kind, fields.value);
+  if (stored === null) return jsonResponse({ error: "Invalid promotion" }, 400, cors);
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  try {
+    const results = await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO promotions (id, code, description, kind, value, min_service_cents, max_redemptions, active,
+          starts_at, ends_at, created_by, updated_by, revision, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+      `).bind(id, fields.code, fields.description || "", fields.kind, stored, fields.minServiceCents ?? 0,
+        fields.maxRedemptions ?? null, fields.active ?? 1, fields.starts_at ?? null, fields.ends_at ?? null,
+        actor, actor, now, now),
+      env.DB.prepare(`
+        INSERT INTO promotion_events (id, promotion_id, event_type, actor_id, details_json, created_at)
+        SELECT ?, ?, 'created', ?, ?, ? WHERE EXISTS (SELECT 1 FROM promotions WHERE id = ?)
+      `).bind(crypto.randomUUID(), id, actor, JSON.stringify({ code: fields.code, kind: fields.kind, value: stored }), now, id),
+    ]);
+    if (results[0]?.meta?.changes !== 1) return jsonResponse({ error: "Promotion could not be saved" }, 409, cors);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (message.includes("promotions.code")) {
+      return jsonResponse({ error: "A promotion with that code already exists" }, 409, cors);
+    }
+    throw error;
+  }
+  const row = await env.DB.prepare("SELECT * FROM promotions WHERE id = ?").bind(id).first();
+  return jsonResponse({ promotion: promoForOperator(row) }, 201, cors);
+}
+
+async function updateOperatorPromotion(request, env, id, actor, cors) {
+  const input = await readJson(request);
+  const revision = Number(input?.revision);
+  const fields = promoInput(input?.fields, { partial: true });
+  if (!fields || !Number.isInteger(revision) || revision < 1 || !Object.keys(fields).length) {
+    return jsonResponse({ error: "Invalid promotion update" }, 400, cors);
+  }
+  const current = await env.DB.prepare("SELECT * FROM promotions WHERE id = ?").bind(id).first();
+  if (!current) return jsonResponse({ error: "Promotion not found" }, 404, cors);
+  if (revision !== current.revision) {
+    return jsonResponse({ error: "Promotion changed; refresh and try again" }, 409, cors);
+  }
+  const kind = fields.kind ?? current.kind;
+  if (fields.kind !== undefined && fields.kind !== current.kind && fields.value === undefined) {
+    return jsonResponse({ error: "A new discount value is required when changing the promotion type" }, 400, cors);
+  }
+  const stored = fields.value === undefined ? current.value : promoStoredValue(kind, fields.value);
+  if (stored === null) return jsonResponse({ error: "Invalid promotion update" }, 400, cors);
+  const startsAt = fields.starts_at === undefined ? current.starts_at : fields.starts_at;
+  const endsAt = fields.ends_at === undefined ? current.ends_at : fields.ends_at;
+  if (startsAt && endsAt && startsAt >= endsAt) {
+    return jsonResponse({ error: "The promotion window is invalid" }, 400, cors);
+  }
+  const columns = {
+    code: fields.code, description: fields.description, kind: fields.kind, value: stored,
+    min_service_cents: fields.minServiceCents, max_redemptions: fields.maxRedemptions,
+    active: fields.active, starts_at: fields.starts_at, ends_at: fields.ends_at,
+  };
+  const labels = { code: "code", description: "description", kind: "kind", value: "value", min_service_cents: "minService", max_redemptions: "maxRedemptions", active: "active", starts_at: "startsAt", ends_at: "endsAt" };
+  const changes = {};
+  const sets = [];
+  const binds = [];
+  for (const [column, value] of Object.entries(columns)) {
+    if (value === undefined || value === current[column] || (typeof value === "number" && value === Number(current[column]))) continue;
+    changes[labels[column]] = { from: current[column], to: value };
+    sets.push(`${column} = ?`);
+    binds.push(value);
+  }
+  if (!sets.length) return jsonResponse({ error: "No changes to save" }, 400, cors);
+  const now = new Date().toISOString();
+  const eventId = crypto.randomUUID();
+  try {
+    const results = await env.DB.batch([
+      env.DB.prepare(`
+        UPDATE promotions SET ${sets.join(", ")}, updated_by = ?, updated_at = ?, revision = revision + 1
+        WHERE id = ? AND revision = ?
+      `).bind(...binds, actor, now, id, current.revision),
+      env.DB.prepare(`
+        INSERT INTO promotion_events (id, promotion_id, event_type, actor_id, details_json, created_at)
+        SELECT ?, ?, 'updated', ?, ?, ?
+        WHERE changes() = 1 AND EXISTS (SELECT 1 FROM promotions WHERE id = ? AND revision = ?)
+      `).bind(eventId, id, actor, JSON.stringify({ changes }), now, id, current.revision + 1),
+    ]);
+    if (results[0]?.meta?.changes !== 1) {
+      return jsonResponse({ error: "Promotion changed; refresh and try again" }, 409, cors);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (message.includes("promotions.code")) {
+      return jsonResponse({ error: "A promotion with that code already exists" }, 409, cors);
+    }
+    throw error;
+  }
+  const row = await env.DB.prepare("SELECT * FROM promotions WHERE id = ?").bind(id).first();
+  return jsonResponse({ promotion: promoForOperator(row) }, 200, cors);
+}
+
 async function requireOperator(request, env, cors) {
   const auth = await verifyOperator(request, env);
   if (auth.kind === "unconfigured") {
@@ -1625,7 +1938,7 @@ async function requireOperator(request, env, cors) {
   return { email: auth.email };
 }
 
-export { canonicalize, csvCell, customerCancellationIsLate, isPickupSlotAvailable, isScheduledSlot, isValidDate, makeTrackingToken, priceInCents };
+export { canonicalize, csvCell, customerCancellationIsLate, isPickupSlotAvailable, isScheduledSlot, isValidDate, makeTrackingToken, normalizePromoCode, priceInCents, promoDiscountCents, promoEligibility, promoStoredValue };
 
 export default {
   async fetch(request, env) {
@@ -1742,6 +2055,16 @@ export default {
         const penaltyMatch = url.pathname.match(/^\/api\/operator\/penalties\/([0-9a-f-]{36})\/waive$/i);
         if (penaltyMatch && request.method === "POST") {
           return await waiveOperatorPenalty(request, env, penaltyMatch[1], operator.email, cors || {});
+        }
+        if (request.method === "GET" && url.pathname === "/api/operator/promotions") {
+          return await getOperatorPromotions(env, cors || {});
+        }
+        if (request.method === "POST" && url.pathname === "/api/operator/promotions") {
+          return await createOperatorPromotion(request, env, operator.email, cors || {});
+        }
+        const promoMatch = url.pathname.match(/^\/api\/operator\/promotions\/([0-9a-f-]{36})$/i);
+        if (promoMatch && request.method === "PATCH") {
+          return await updateOperatorPromotion(request, env, promoMatch[1], operator.email, cors || {});
         }
         const detailMatch = url.pathname.match(/^\/api\/operator\/bookings\/([0-9a-f-]{36})$/i);
         if (detailMatch && request.method === "GET") {

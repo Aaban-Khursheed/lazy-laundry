@@ -77,6 +77,14 @@
   overflow-wrap: anywhere;
 }
 
+.customer-app .order-meta-discount strong {
+  color: var(--ink);
+  background: var(--yellow);
+  border-radius: 999px;
+  padding: 2px 10px;
+  justify-self: end;
+}
+
 .customer-app .tracking-current-status {
   display: flex;
   align-items: center;

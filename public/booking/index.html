@@ -331,6 +331,15 @@
               </div>
             </fieldset>
 
+            <fieldset class="form-section promo-section">
+              <legend>Promo code <span class="legend-hint">(optional)</span></legend>
+              <div class="promo-row">
+                <input class="field-card-input promo-input" id="customer-promo" name="promoCode" type="text" placeholder="e.g. WELCOME10" autocomplete="off" maxlength="32" spellcheck="false" />
+                <button type="button" id="promo-apply" data-ui="button" data-intent="secondary" data-size="md">Apply</button>
+              </div>
+              <p class="promo-note" id="promo-note" role="status" hidden></p>
+            </fieldset>
+
             <div class="terms-card">
               <label class="terms-row">
                 <input class="terms-checkbox" id="terms-accepted" name="termsAccepted" type="checkbox" required />

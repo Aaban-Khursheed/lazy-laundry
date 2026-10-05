@@ -1,0 +1,28 @@
+#operator-promos { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; }
+#operator-promos[hidden] { display: none; }
+#operator-queue-view { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; flex: 1; }
+#operator-queue-view[hidden] { display: none; }
+
+.operator-promo-card { flex-shrink: 0; }
+.operator-promo-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px 12px; align-items: end; margin-top: 8px; }
+.operator-field label { display: block; margin-bottom: 3px; color: #54564e; font-size: 12px; font-weight: 600; }
+.operator-field .text-input { width: 100%; min-width: 0; }
+.operator-field-check { display: flex; align-items: center; min-height: 40px; }
+.operator-field-check label { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; font-weight: 600; color: var(--operator-ink, #242319); cursor: pointer; }
+.operator-field-check input { width: 18px; height: 18px; accent-color: var(--operator-accent, #242319); cursor: pointer; }
+.operator-promo-submit { display: flex; align-items: end; }
+
+.operator-promo-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; margin: 0; padding: 0; list-style: none; }
+.operator-promo-item { padding: 10px 12px; border: 1px solid var(--operator-border, #cfc9b7); border-radius: 8px; background: var(--operator-paper, #fffdf7); }
+.operator-promo-item-main { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.operator-promo-code { font-family: ui-monospace, "SF Mono", monospace; font-size: 14px; letter-spacing: 0.02em; }
+.operator-promo-meta { margin: 6px 0 0; color: #54564e; font-size: 12px; }
+.operator-promo-desc { margin: 6px 0 0; color: #67685e; font-size: 12px; }
+.operator-promo-actions { display: flex; gap: 6px; margin-top: 8px; }
+
+.operator-discount-row dt { color: #54564e; }
+.operator-discount-row dd { color: var(--operator-ink, #242319); background: var(--yellow, #ffd21a); border-radius: 999px; padding: 1px 8px; font-weight: 700; }
+
+@media (max-width: 1023px) {
+  #operator-promos { display: none !important; }
+}
