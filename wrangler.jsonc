@@ -22,7 +22,7 @@
   },
   "vars": {
     "ENVIRONMENT": "production",
-    "PUBLIC_BOOKING_ENABLED": "false",
+    "PUBLIC_BOOKING_ENABLED": "true",
     "PRICE_REVISION": "launch-v1",
     "TURNSTILE_SITEKEY": "0x4AAAAAAFOOEDMJ3lnxqDaX",
     "CUSTOMER_HOSTS": "lazylaundry.me,www.lazylaundry.me",
