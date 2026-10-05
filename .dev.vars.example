@@ -1,0 +1,6 @@
+# Local-only values. Copy to .dev.vars and replace before local API tests.
+TRACKING_TOKEN_ENCRYPTION_KEY=base64url-32-byte-secret
+
+# Optional local Turnstile test values; production secrets belong in Wrangler/Cloudflare.
+TURNSTILE_SECRET=
+TURNSTILE_SITEKEY=

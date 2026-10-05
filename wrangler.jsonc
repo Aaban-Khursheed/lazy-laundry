@@ -1,13 +1,67 @@
 {
-  "name": "lazylaundrycomingsoon",
-  "compatibility_date": "2026-09-28",
-  "assets": {
-    "directory": "./public"
-  },
-  "routes": [
-    {
-      "pattern": "lazylaundry.me",
-      "custom_domain": true
+  "name": "lazylaundry",
+  "main": "./api/worker.js",
+  "compatibility_date": "2026-10-01",
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 0.05
     }
-  ]
+  },
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": true,
+    "html_handling": "none",
+    "not_found_handling": "404-page"
+  },
+  "vars": {
+    "ENVIRONMENT": "production",
+    "PUBLIC_BOOKING_ENABLED": "false",
+    "PRICE_REVISION": "launch-v1",
+    "TURNSTILE_SITEKEY": "",
+    "CUSTOMER_HOSTS": "lazylaundry.me,www.lazylaundry.me",
+    "TURNSTILE_HOSTNAMES": "lazylaundry.me,www.lazylaundry.me",
+    "OPERATOR_HOST": "ops.lazylaundry.me",
+    "OPERATOR_ALLOWED_EMAILS": "25087560@imail.sunway.edu.my",
+    "SERVICE_TIMEZONE": "Asia/Kuala_Lumpur"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "lazy-laundry-production",
+      "database_id": "REPLACE_BEFORE_DEPLOY",
+      "migrations_dir": "api/migrations"
+    }
+  ],
+  "env": {
+    "local": {
+      "name": "lazylaundry-local",
+      "vars": {
+        "ENVIRONMENT": "local",
+        "PUBLIC_BOOKING_ENABLED": "true",
+        "PRICE_REVISION": "launch-v1",
+        "TURNSTILE_SITEKEY": "",
+        "CUSTOMER_HOSTS": "localhost,127.0.0.1",
+        "TURNSTILE_HOSTNAMES": "localhost,127.0.0.1",
+        "OPERATOR_HOST": "ops.localhost",
+        "OPERATOR_ALLOWED_EMAILS": "local.operator@example.invalid",
+        "SERVICE_TIMEZONE": "Asia/Kuala_Lumpur",
+        "LOCAL_OPERATOR_EMAIL": "local.operator@example.invalid"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "lazy-laundry-local",
+          "database_id": "local",
+          "migrations_dir": "api/migrations"
+        }
+      ]
+    }
+  }
 }

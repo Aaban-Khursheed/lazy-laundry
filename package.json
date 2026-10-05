@@ -1,0 +1,31 @@
+{
+  "name": "lazy-laundry",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build:ui": "esbuild ui/variants.js --bundle --format=esm --target=es2022 --minify --legal-comments=none --outfile=public/shared/variants.js",
+    "predev": "npm run build:ui",
+    "dev": "wrangler dev --env local",
+    "pretest:e2e": "npm run build:ui",
+    "predeploy:dry-run": "npm run build:ui",
+    "predeploy": "npm run build:ui",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "deploy:dry-run": "wrangler deploy --dry-run --env=\"\"",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "esbuild": "0.28.1",
+    "eslint": "10.12.0",
+    "vitest": "5.0.3",
+    "wrangler": "4.144.0"
+  },
+  "dependencies": {
+    "class-variance-authority": "0.7.1"
+  }
+}

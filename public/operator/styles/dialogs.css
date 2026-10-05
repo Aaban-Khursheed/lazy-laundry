@@ -1,0 +1,14 @@
+.operator-dialog { width: min(540px, calc(100vw - 80px)); max-height: calc(100vh - 80px); padding: 0; overflow-y: auto; border: 1px solid #d9d3bf; border-radius: 16px; background: #fffdf7; color: #20211d; box-shadow: 0 32px 100px #18170f40; }
+.operator-dialog::backdrop { background: #24231980; backdrop-filter: blur(3px); }
+.operator-dialog-form { padding: 28px; }
+.operator-dialog-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 22px; }
+.operator-dialog-header .eyebrow { margin: 0; color: #8b7740; }
+.operator-dialog h2 { margin: 0 0 10px; font-size: 27px; line-height: 1.2; letter-spacing: -0.035em; }
+.operator-dialog-context { margin: 0 0 20px; color: #867c61; font-size: 12px; font-weight: 650; overflow-wrap: anywhere; }
+.operator-dialog #operator-dialog-description { margin: 0 0 24px; color: #626258; font-size: 13px; line-height: 1.8; }
+.operator-dialog label { display: block; margin-bottom: 8px; font-size: 12px; font-weight: 650; }
+.operator-dialog-required { margin-left: 6px; color: #a24e3c; font-size: 10px; font-weight: 500; }
+.operator-dialog textarea { display: block; resize: vertical; }
+.operator-dialog-schedule { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+.operator-dialog .operator-help { margin: 8px 0 0; font-size: 10px; }
+.operator-dialog-footer { display: flex; justify-content: flex-end; gap: 12px; margin-top: 28px; padding-top: 22px; border-top: 1px solid #e9e3d1; }

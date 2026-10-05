@@ -1,0 +1,448 @@
+.customer-app {
+  min-width: 320px;
+  background: var(--paper);
+  overflow-x: clip;
+}
+
+.customer-app .customer-shell {
+  width: 100%;
+  max-width: 480px;
+  min-height: 100vh;
+  min-height: 100svh;
+  margin: 0 auto;
+  padding: env(safe-area-inset-top, 0px) max(16px, env(safe-area-inset-right, 0px)) max(24px, env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px));
+  overflow: visible;
+  background: var(--paper);
+}
+
+.customer-app .site-header {
+  display: flex;
+  min-height: 86px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.customer-app .brand {
+  min-height: 44px;
+  justify-content: center;
+}
+
+.customer-app .header-badge {
+  padding: 9px 10px;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+}
+
+.customer-app main,
+.customer-app .view {
+  min-width: 0;
+}
+
+.customer-app .view {
+  padding-bottom: 24px;
+  animation: customer-view-in 180ms ease both;
+}
+
+.customer-app .view:focus {
+  outline: none;
+}
+
+.customer-app .view-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 0 22px;
+}
+
+.customer-app .view-heading > div {
+  min-width: 0;
+}
+
+.customer-app .view-heading .eyebrow {
+  margin-bottom: 5px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+
+.customer-app .view-heading h2 {
+  margin: 0;
+  font-size: clamp(28px, 7.5vw, 34px);
+  font-weight: 900;
+  letter-spacing: -0.055em;
+  line-height: 1.1;
+}
+
+.customer-app .back-button {
+  display: grid;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  flex: 0 0 auto;
+  place-items: center;
+  margin: 0;
+  padding: 0;
+  border: 1.5px solid var(--ink);
+  border-radius: 50%;
+  color: var(--ink);
+  background: var(--white);
+  box-shadow: 0 2px 0 var(--ink);
+  font-size: 22px;
+}
+
+.customer-app .hero-art {
+  position: relative;
+  height: 260px;
+  margin: 0 0 24px;
+  overflow: hidden;
+  isolation: isolate;
+  border: 2px solid var(--ink);
+  border-radius: 22px;
+  background: var(--red);
+  box-shadow: 0 5px 0 var(--ink);
+}
+
+.customer-app .hero-slogan {
+  position: absolute;
+  z-index: 4;
+  top: 22px;
+  right: 18px;
+  left: 18px;
+  display: grid;
+  margin: 0;
+  color: var(--paper);
+  font-size: clamp(31px, 8.6vw, 42px);
+  font-weight: 950;
+  letter-spacing: -0.065em;
+  line-height: 1.03;
+  text-shadow: 2px 2px 0 var(--ink);
+}
+
+.customer-app .hero-slogan span {
+  display: block;
+  color: inherit;
+  white-space: nowrap;
+  text-shadow: inherit;
+}
+
+.customer-app .hero-slogan span:last-child {
+  color: var(--yellow);
+}
+
+.customer-app .hero-art-caption {
+  position: absolute;
+  z-index: 4;
+  bottom: 13px;
+  left: 18px;
+  color: var(--paper);
+  font-size: 9px;
+  font-weight: 850;
+  letter-spacing: 0.09em;
+}
+
+.customer-app .hero-art::before,
+.customer-app .hero-art::after {
+  position: absolute;
+  z-index: -1;
+  width: 150%;
+  height: 50px;
+  content: "";
+  background: var(--pink);
+  transform: rotate(-23deg);
+}
+
+.customer-app .hero-art::before {
+  top: 130px;
+  left: -25%;
+}
+
+.customer-app .hero-art::after {
+  top: 218px;
+  left: -20%;
+}
+
+.customer-app .burst {
+  position: absolute;
+  z-index: 1;
+  width: 64px;
+  height: 64px;
+  border: 0;
+  background: var(--yellow);
+  clip-path: polygon(50% 0, 61% 30%, 85% 15%, 70% 40%, 100% 50%, 70% 61%, 85% 85%, 60% 70%, 50% 100%, 39% 70%, 15% 85%, 30% 60%, 0 50%, 30% 40%, 15% 15%, 40% 30%);
+}
+
+.customer-app .burst-one {
+  top: 118px;
+  left: 12px;
+  transform: rotate(13deg);
+}
+
+.customer-app .burst-two {
+  top: 100px;
+  right: 8px;
+  bottom: auto;
+  width: 46px;
+  height: 46px;
+  transform: rotate(-12deg);
+}
+
+.customer-app .hero-washer {
+  position: absolute;
+  z-index: 3;
+  right: 24px;
+  bottom: 16px;
+  width: 112px;
+  height: 132px;
+  border: 4px solid var(--ink);
+  border-radius: 14px;
+  background: var(--paper);
+  box-shadow: 5px 5px 0 var(--ink);
+  transform: rotate(6deg);
+}
+
+.customer-app .hero-washer::before {
+  position: absolute;
+  top: 12px;
+  right: 10px;
+  left: 10px;
+  height: 13px;
+  border: 3px solid var(--ink);
+  border-radius: 4px;
+  content: "";
+  background: var(--yellow);
+}
+
+.customer-app .hero-washer::after {
+  position: absolute;
+  top: 42px;
+  left: 18px;
+  width: 65px;
+  height: 65px;
+  border: 4px solid var(--ink);
+  border-radius: 50%;
+  content: "";
+  background: var(--blue);
+  box-shadow: inset 0 0 0 8px rgba(255, 255, 255, 0.3);
+}
+
+.customer-app .hero-shirt {
+  position: absolute;
+  z-index: 4;
+  bottom: 35px;
+  width: 92px;
+  height: 85px;
+  border: 0;
+  border-radius: 0;
+  background: var(--ink);
+  clip-path: polygon(25% 0, 38% 0, 42% 10%, 58% 10%, 62% 0, 75% 0, 100% 23%, 82% 43%, 75% 35%, 75% 100%, 25% 100%, 25% 35%, 18% 43%, 0 23%);
+}
+
+.customer-app .hero-shirt::after {
+  position: absolute;
+  inset: 4px;
+  content: "";
+  background: var(--blue);
+  clip-path: inherit;
+}
+
+.customer-app .shirt-one {
+  left: 23px;
+  transform: rotate(-17deg);
+}
+
+.customer-app .shirt-two {
+  bottom: 27px;
+  left: 80px;
+  transform: rotate(12deg);
+}
+
+.customer-app .shirt-two::after {
+  background: var(--yellow);
+}
+
+.customer-app .home-copy {
+  padding: 0 2px;
+}
+
+.customer-app .home-copy .eyebrow {
+  margin-bottom: 8px;
+}
+
+.customer-app .hero-description {
+  max-width: none;
+  margin: 0 0 18px;
+  color: var(--ink);
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.customer-app .home-price-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 12px;
+  margin-bottom: 22px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 15px;
+  background: var(--white);
+}
+
+.customer-app .home-price-note > div {
+  display: grid;
+  gap: 5px;
+}
+
+.customer-app .home-price-note > div strong {
+  font-size: 14px;
+}
+
+.customer-app .home-price-note > div span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.customer-app .home-price {
+  font-size: 26px;
+  letter-spacing: -0.05em;
+  white-space: nowrap;
+}
+
+.customer-app .home-actions {
+  display: grid;
+  gap: 14px;
+}
+
+.customer-app .home-actions :is(.button, .ui-button),
+.customer-app :is(#checkout-button, .submit-button) {
+  justify-content: space-between;
+  text-align: left;
+}
+
+.customer-app .prototype-notice {
+  margin: 24px 0 16px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.customer-app .prototype-notice strong,
+.customer-app .prototype-notice span {
+  display: block;
+}
+
+.customer-app .prototype-notice strong {
+  margin-bottom: 4px;
+}
+
+.customer-app .home-note {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 18px 2px 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.customer-app .status-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border: 1px solid var(--ink);
+  border-radius: 50%;
+  background: var(--yellow);
+  box-shadow: none;
+}
+
+.customer-app :is(input, select, textarea) {
+  min-width: 0;
+  font-size: 16px;
+}
+
+.customer-app .text-input {
+  min-height: 48px;
+}
+
+.customer-app .text-button {
+  min-height: 44px;
+  border: 0;
+  padding: 10px 12px;
+  color: var(--ink);
+  background: transparent;
+  box-shadow: none;
+  font-size: 14px;
+  font-weight: 750;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.customer-app .site-footer {
+  display: grid;
+  justify-content: center;
+  gap: 7px;
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+  padding: 23px 0 8px;
+  color: var(--muted);
+  text-align: center;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.customer-app .site-footer span:first-child {
+  color: var(--ink);
+  font-weight: 900;
+  letter-spacing: 0.1em;
+}
+
+.customer-app .turnstile-challenge {
+  position: fixed;
+  z-index: 50;
+  bottom: max(12px, env(safe-area-inset-bottom, 0px));
+  left: 50%;
+  width: max-content;
+  max-width: calc(100vw - 8px);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 2px;
+  background: var(--white);
+  box-shadow: var(--shadow);
+  transform: translateX(-50%);
+}
+
+@keyframes customer-view-in {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (min-width: 560px) {
+  .customer-app {
+    background: #ece7dd;
+  }
+
+  .customer-app .customer-shell {
+    min-height: calc(100vh - 48px);
+    min-height: calc(100svh - 48px);
+    margin: 24px auto;
+    border: 1px solid var(--line);
+    border-radius: 28px;
+    padding-right: 20px;
+    padding-left: 20px;
+    box-shadow: 0 16px 60px rgba(23, 23, 23, 0.08);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .customer-app .view {
+    animation: none;
+  }
+
+  .customer-app *,
+  .customer-app *::before,
+  .customer-app *::after {
+    scroll-behavior: auto;
+    transition: none;
+  }
+}

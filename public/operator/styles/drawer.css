@@ -1,0 +1,20 @@
+.operator-app .operator-drawer { position: fixed; inset: 0 0 0 auto; width: min(580px, 46vw); max-width: none; height: 100dvh; max-height: none; margin: 0; padding: 0; overflow: hidden; border: 0; border-left: 1px solid var(--operator-border); border-radius: 0; background: #fffdf7; color: #20211d; box-shadow: -28px 0 90px #18170f33; }
+.operator-app .operator-drawer:not([open]) { display: none; }
+.operator-app .operator-drawer[open] { display: flex; flex-direction: column; }
+.operator-drawer::backdrop { background: #2423194d; backdrop-filter: blur(2px); }
+.operator-drawer-chrome { flex-shrink: 0; border-bottom: 1px solid var(--operator-border); background: #fffdf7; }
+.operator-drawer-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px 10px; }
+.operator-drawer-heading-group { min-width: 0; }
+.operator-drawer-heading-group .eyebrow { color: #8b7740; }
+.operator-drawer-heading-group h2 { margin: 2px 0 0; font-size: 17px; letter-spacing: -0.02em; }
+.operator-drawer-header-actions { display: flex; flex-shrink: 0; gap: 6px; }
+.operator-drawer-tabs { display: flex; gap: 2px; padding: 0 16px; }
+.operator-drawer-tabs [role="tab"] { position: relative; padding: 8px 12px 10px; border: 0; background: none; color: #606158; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.operator-drawer-tabs [role="tab"]::after { content: ""; position: absolute; right: 8px; bottom: -1px; left: 8px; height: 2px; border-radius: 2px; background: transparent; }
+.operator-drawer-tabs [role="tab"]:hover { color: #383a32; }
+.operator-drawer-tabs [role="tab"][aria-selected="true"] { color: #20211d; }
+.operator-drawer-tabs [role="tab"][aria-selected="true"]::after { background: #dcac00; }
+.operator-drawer-tabs [role="tab"]:focus-visible { outline: 3px solid #3f86f5; outline-offset: -2px; border-radius: 4px 4px 0 0; }
+.operator-app .operator-detail { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #d4d0c0 transparent; background: #fffdf7; }
+.operator-detail .operator-tabpanel { min-height: 100%; }
+.operator-detail .operator-tabpanel:focus-visible { outline: none; }

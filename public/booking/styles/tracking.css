@@ -1,0 +1,456 @@
+.customer-app .tracking-card {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 18px 16px;
+  background: var(--white);
+  box-shadow: none;
+}
+
+.customer-app .tracking-intro {
+  margin: 0 0 22px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.customer-app .tracking-card > .field-label {
+  margin: 0 0 8px;
+  font-size: 12px;
+}
+
+.customer-app .tracking-card > .text-input {
+  margin-bottom: 18px;
+}
+
+.customer-app .tracking-card > :is(.button, .ui-button) {
+  margin-top: 4px;
+}
+
+.customer-app .tracking-result {
+  margin-top: 26px;
+  border-top: 1px solid var(--line);
+  padding-top: 24px;
+}
+
+.customer-app .tracking-result-heading {
+  margin-bottom: 20px;
+}
+
+.customer-app .tracking-result-heading .eyebrow {
+  margin-bottom: 5px;
+}
+
+.customer-app .tracking-result h3 {
+  margin: 0;
+  font-size: 25px;
+  font-weight: 850;
+  letter-spacing: -0.035em;
+  overflow-wrap: anywhere;
+}
+
+.customer-app .tracking-result h3:focus {
+  outline: none;
+}
+
+.customer-app .order-meta {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 22px;
+}
+
+.customer-app .order-meta-row {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  align-items: baseline;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.customer-app .order-meta-row strong {
+  min-width: 0;
+  color: var(--ink);
+  font-weight: 700;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.customer-app .tracking-current-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin: 0 0 20px;
+  border-radius: 12px;
+  padding: 13px;
+  background: var(--cream);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.customer-app .tracking-current-status.cancelled {
+  background: #fff2ed;
+}
+
+.customer-app .status-timeline {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0 0 4px;
+  list-style: none;
+}
+
+.customer-app .status-item {
+  position: relative;
+  display: flex;
+  min-height: 46px;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 0 0 14px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.5;
+}
+
+.customer-app .status-item::before {
+  z-index: 1;
+  width: 19px;
+  height: 19px;
+  flex: 0 0 auto;
+  margin-top: 1px;
+  border: 1.5px solid var(--line);
+  border-radius: 50%;
+  content: "";
+  background: var(--white);
+}
+
+.customer-app .status-item:not(:last-child)::after {
+  position: absolute;
+  top: 19px;
+  bottom: -2px;
+  left: 9px;
+  width: 1px;
+  height: auto;
+  content: "";
+  background: var(--line);
+}
+
+.customer-app .status-item.active {
+  color: var(--ink);
+}
+
+.customer-app .status-item.active::before {
+  border-color: var(--ink);
+  background: var(--yellow);
+}
+
+.customer-app .status-item[aria-current="step"] {
+  font-weight: 850;
+}
+
+.customer-app .tracking-actions {
+  display: grid;
+  gap: 9px;
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 22px;
+}
+
+.customer-app .tracking-actions h4 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+
+.customer-app .tracking-actions .tracking-local-note {
+  margin: 0 0 9px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.customer-app .tracking-actions .field-label {
+  margin: 9px 0 0;
+  font-size: 12px;
+}
+
+.customer-app .tracking-action-buttons {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  margin-top: 13px;
+}
+
+.customer-app .tracking-action-buttons :is(.button, .ui-button) {
+  margin-top: 0;
+}
+
+.customer-app .tracking-actions #tracking-verify,
+.customer-app .tracking-actions #tracking-reschedule-panel {
+  display: grid;
+  gap: 9px;
+  border-top: 1px solid var(--line);
+  padding-top: 16px;
+}
+
+.customer-app .tracking-actions #tracking-verify[hidden],
+.customer-app .tracking-actions #tracking-reschedule-panel[hidden] {
+  display: none;
+}
+
+.customer-app .tracking-confirm-dialog {
+  width: min(92vw, 340px);
+  border: 1.5px solid var(--line);
+  border-radius: 18px;
+  padding: 24px 20px;
+  background: var(--white);
+  color: var(--ink);
+  box-shadow: 0 24px 60px rgba(24, 23, 15, 0.25);
+}
+
+.customer-app .tracking-confirm-dialog::backdrop {
+  background: rgba(36, 35, 25, 0.45);
+  backdrop-filter: blur(2px);
+}
+
+.customer-app .tracking-confirm-dialog[open] {
+  display: grid;
+  gap: 10px;
+}
+
+.customer-app .tracking-confirm-title {
+  margin: 0;
+  font-size: 19px;
+}
+
+.customer-app .tracking-confirm-dialog .tracking-local-note {
+  margin: 0;
+}
+
+.customer-app .tracking-edit {
+  display: grid;
+  gap: 9px;
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 22px;
+}
+
+.customer-app .tracking-edit[hidden] {
+  display: none;
+}
+
+.customer-app .tracking-edit h4 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+
+.customer-app .tracking-edit .tracking-local-note {
+  margin: 0 0 9px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.customer-app .tracking-edit .field-label {
+  margin: 9px 0 0;
+  font-size: 12px;
+}
+
+.customer-app .tracking-edit-finish {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 9px 0 0;
+  border: 0;
+  padding: 0;
+}
+
+.customer-app .tracking-edit-finish legend {
+  flex: 0 0 100%;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.customer-app .tracking-edit-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.customer-app .tracking-edit-total {
+  margin: 6px 0 0;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.customer-app .tracking-edit .form-error {
+  margin: 4px 0 0;
+}
+
+.customer-app .tracking-edit-summary {
+  margin: 2px 0 6px;
+}
+
+.customer-app .confirmation-card {
+  padding: 8px 0 0;
+  text-align: center;
+}
+
+.customer-app .confirmation-mark {
+  display: grid;
+  width: 68px;
+  height: 68px;
+  margin: 0 auto 25px;
+  place-items: center;
+  border: 2px solid var(--ink);
+  border-radius: 22px;
+  background: var(--yellow);
+  box-shadow: 3px 3px 0 var(--ink);
+  font-size: 34px;
+  font-weight: 900;
+  transform: rotate(-6deg);
+}
+
+.customer-app .confirmation-card h2 {
+  max-width: 340px;
+  margin: 0 auto 14px;
+  font-size: clamp(30px, 8vw, 38px);
+  font-weight: 900;
+  letter-spacing: -0.055em;
+  line-height: 1.1;
+}
+
+.customer-app .confirmation-copy {
+  max-width: 340px;
+  margin: 0 auto 24px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.customer-app .booking-number-card {
+  display: grid;
+  gap: 7px;
+  margin-bottom: 16px;
+  border: 1.5px dashed var(--ink);
+  border-radius: 14px;
+  padding: 18px 12px;
+  background: var(--cream);
+}
+
+.customer-app .booking-number-card span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.customer-app .booking-number-card strong {
+  font-size: 27px;
+  font-weight: 850;
+  letter-spacing: 0.025em;
+  overflow-wrap: anywhere;
+}
+
+.customer-app .confirmation-details {
+  display: grid;
+  min-width: 0;
+  gap: 15px;
+  margin-bottom: 24px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 17px 15px;
+  background: var(--white);
+  text-align: left;
+}
+
+.customer-app .tracking-token-card {
+  min-width: 0;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 18px;
+}
+
+.customer-app .tracking-token-card .field-label {
+  margin-bottom: 10px;
+  font-size: 12px;
+}
+
+.customer-app .tracking-token-controls {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.customer-app .tracking-token-controls .text-input {
+  width: 100%;
+  min-width: 0;
+  flex: 1 1 220px;
+  font-size: 16px;
+}
+
+.customer-app .tracking-token-controls .ui-button {
+  flex: 1 1 100px;
+  justify-content: center;
+}
+
+.customer-app .tracking-token-warning {
+  display: block;
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.customer-app #tracking-token-copy-feedback {
+  margin: 9px 0 0;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.5;
+}
+
+.customer-app #tracking-token-copy-feedback:empty {
+  display: none;
+}
+
+.customer-app .confirmation-invoice-heading {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 12px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.customer-app .confirmation-total-row {
+  margin-top: 2px;
+  border-top: 1px solid var(--line);
+  padding-top: 15px;
+  color: var(--ink);
+  font-weight: 800;
+}
+
+.customer-app .confirmation-total-row strong {
+  color: var(--ink);
+  font-size: 24px;
+  line-height: 1.2;
+}
+
+.customer-app .confirmation-card > .text-button {
+  margin-top: 12px;
+}

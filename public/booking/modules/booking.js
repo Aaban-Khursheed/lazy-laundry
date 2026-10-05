@@ -1,22 +1,20 @@
+import { buttonVariants } from "../../shared/variants.js";
 import { PRICING, STATUS_STEPS } from "./constants.js";
 import { API_MODE, apiRequest } from "./api.js";
+import { getTurnstileToken } from "./turnstile.js";
 import {
   clearError,
   dateStringFromParts,
   escapeHtml,
-  expectedReadyTime,
   formatDate,
   formatMoney,
   formatSlot,
-  generateBookingNumber,
   getMaxBookingDateString,
   getTodayString,
   getSlotsForDate,
-  isSlotBooked,
   isSlotClosed,
   isSlotInCurrentSchedule,
   isWeekend,
-  saveBooking,
   showError,
 } from "./utils.js";
 
@@ -37,6 +35,7 @@ const priceBreakdown = document.querySelector("#price-breakdown");
 const checkoutButton = document.querySelector("#checkout-button");
 const checkoutTotalPrice = document.querySelector("#checkout-total-price");
 const checkoutPriceBreakdown = document.querySelector("#checkout-price-breakdown");
+const checkoutPickupSummary = document.querySelector("#checkout-pickup-summary");
 const bookingStepError = document.querySelector("#booking-step-error");
 const termsAcceptedInput = document.querySelector("#terms-accepted");
 const countryCodeInput = document.querySelector("#customer-country-code");
@@ -47,6 +46,70 @@ const submitButton = bookingForm.querySelector('[type="submit"]');
 let currentBookedSlots = new Set();
 let loadedAvailabilityDate = "";
 let availabilityRequestId = 0;
+let currentEstimate = null;
+let estimateRequestId = 0;
+let estimateTimer;
+let estimateInFlight = null;
+let estimateController = null;
+let submitting = false;
+let pendingBooking = null;
+let bookingEnabled = false;
+const lockedControls = new Map();
+const recoveryResetButton = document.querySelector("#booking-recovery-reset");
+
+export function isBookingLocked() {
+  return submitting || Boolean(pendingBooking);
+}
+
+export function setBookingEnabled(enabled) {
+  bookingEnabled = enabled === true;
+}
+
+function updateBookingControls() {
+  lockedControls.forEach((disabled, control) => { control.disabled = disabled; });
+  lockedControls.clear();
+  if (isBookingLocked()) {
+    document.querySelectorAll('#booking-form input, #booking-form select, #booking-form textarea, #booking-form button, [data-view-target]').forEach((control) => {
+      lockedControls.set(control, control.disabled);
+      control.disabled = true;
+    });
+    if (!submitting && pendingBooking) submitButton.disabled = false;
+  }
+  recoveryResetButton.hidden = !pendingBooking || submitting;
+  recoveryResetButton.disabled = submitting;
+  if (submitting) submitButton.setAttribute("aria-busy", "true");
+  else submitButton.removeAttribute("aria-busy");
+  document.querySelector("#booking-submit-label").textContent = pendingBooking ? "Retry same booking" : "Confirm booking";
+  document.dispatchEvent(new Event("customer-controls-changed"));
+}
+
+function reportBookingError(message) {
+  showError(formError, message);
+  formError.tabIndex = -1;
+  formError.focus({ preventScroll: false });
+}
+
+function formSignature() {
+  return JSON.stringify([...bookingForm.elements].filter((control) => control.name).map((control) => [control.name, control.value, control.checked ?? null]));
+}
+
+export function refreshBookingWindow(reloadAvailability = false) {
+  if (isBookingLocked()) return;
+  const today = getTodayString();
+  const maximum = getMaxBookingDateString();
+  const changed = pickupDateInput.min !== today || pickupDateInput.max !== maximum;
+  pickupDateInput.min = today;
+  pickupDateInput.max = maximum;
+  const invalidDate = !pickupDateInput.value || pickupDateInput.value < today || pickupDateInput.value > maximum;
+  if (invalidDate) {
+    pickupDateInput.value = today;
+    pickupSlotInput.value = "";
+    showError(bookingStepError, "The pickup date is outside the current booking window. Choose a new available slot.");
+  }
+  if (changed || invalidDate) renderCalendar();
+  if (changed || invalidDate || reloadAvailability) refreshSlots(pickupDateInput.value, true);
+  else renderSlots();
+}
 
 function getSelectedPackage() {
   return Number(document.querySelector('input[name="packageSize"]:checked').value);
@@ -80,12 +143,13 @@ function getPriceDetails() {
   }
 
   if (hangersInput.checked) {
-    items.push({ label: "Hangers", amount: pricing.hanger });
+    items.push({ label: "Hangers", amount: pricing.hanger, included: pricing.hanger === 0 });
   }
 
   return {
     packageSize,
     service,
+    hangers: hangersInput.checked,
     items,
     total: items.reduce((sum, item) => sum + item.amount, 0),
   };
@@ -97,27 +161,33 @@ function renderCalendar() {
   calendarGrid.innerHTML = "";
 
   Array.from({ length: 7 }, (_, offset) => {
-    const date = new Date(`${today}T12:00:00`);
-    date.setDate(date.getDate() + offset);
-    const dateString = dateStringFromParts(date.getFullYear(), date.getMonth(), date.getDate());
+    const date = new Date(`${today}T12:00:00+08:00`);
+    date.setUTCDate(date.getUTCDate() + offset);
+    const dateString = dateStringFromParts(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
     const button = document.createElement("button");
     const isWeekendDate = isWeekend(dateString);
     const dayLabel = offset === 0
       ? "Today"
-      : new Intl.DateTimeFormat("en", { weekday: "short" }).format(date);
-    const monthLabel = new Intl.DateTimeFormat("en", { month: "short" }).format(date);
+      : new Intl.DateTimeFormat("en", { timeZone: "Asia/Kuala_Lumpur", weekday: "short" }).format(date);
+    const monthLabel = new Intl.DateTimeFormat("en", { timeZone: "Asia/Kuala_Lumpur", month: "short" }).format(date);
     const weekendBadge = isWeekendDate ? '<span class="calendar-day-badge">AM Pickup</span>' : "";
 
     button.type = "button";
     button.className = `calendar-day${isWeekendDate ? " weekend" : ""}${dateString === selectedDate ? " selected" : ""}`;
     button.setAttribute("aria-label", `${formatDate(dateString)}${isWeekendDate ? ", morning pickup available" : ""}`);
     button.setAttribute("aria-pressed", String(dateString === selectedDate));
-    button.innerHTML = `<span class="calendar-day-name">${dayLabel}</span><strong>${date.getDate()}</strong><small>${monthLabel}</small>${weekendBadge}`;
+    button.innerHTML = `<span class="calendar-day-name">${dayLabel}</span><strong>${date.getUTCDate()}</strong><small>${monthLabel}</small>${weekendBadge}`;
 
     button.addEventListener("click", () => {
+      if (isBookingLocked()) return;
+      if (dateString < getTodayString() || dateString > getMaxBookingDateString()) {
+        refreshBookingWindow();
+        return;
+      }
       pickupDateInput.value = dateString;
       pickupSlotInput.value = "";
       renderCalendar();
+      calendarGrid.querySelector('[aria-pressed="true"]')?.focus({ preventScroll: true });
       refreshSlots(dateString, true);
     });
 
@@ -136,9 +206,9 @@ function showAvailabilityMessage(message, retryDate = "") {
   if (retryDate) {
     const retryButton = document.createElement("button");
     retryButton.type = "button";
-    retryButton.className = "button button-secondary";
+    retryButton.className = buttonVariants({ intent: "secondary", size: "md", width: "full" });
     retryButton.textContent = "Retry availability";
-    retryButton.addEventListener("click", () => refreshSlots(retryDate, true));
+    retryButton.addEventListener("click", () => refreshBookingWindow(true));
     slotGrid.appendChild(retryButton);
   }
 }
@@ -147,13 +217,13 @@ async function loadAvailability(dateString, alignToAvailable) {
   const requestId = ++availabilityRequestId;
   currentBookedSlots = new Set();
   loadedAvailabilityDate = "";
-  pickupSlotInput.value = "";
+  const selectedSlot = pickupSlotInput.value;
   slotGrid.classList.toggle("weekend", isWeekend(dateString));
   showAvailabilityMessage("Loading pickup availability…");
 
   try {
-    const result = await apiRequest(`/api/availability?date=${encodeURIComponent(dateString)}`);
-    if (requestId !== availabilityRequestId || pickupDateInput.value !== dateString) {
+    const result = await apiRequest(`/api/availability?date=${encodeURIComponent(dateString)}`, { readOnly: true });
+    if (requestId !== availabilityRequestId || pickupDateInput.value !== dateString || isBookingLocked()) {
       return;
     }
     if (result?.date !== dateString || !Array.isArray(result.bookedSlots)) {
@@ -162,9 +232,10 @@ async function loadAvailability(dateString, alignToAvailable) {
 
     currentBookedSlots = new Set(result.bookedSlots.filter((slot) => typeof slot === "string"));
     loadedAvailabilityDate = dateString;
+    pickupSlotInput.value = selectedSlot;
     renderSlots(alignToAvailable);
   } catch (error) {
-    if (requestId !== availabilityRequestId || pickupDateInput.value !== dateString) {
+    if (requestId !== availabilityRequestId || pickupDateInput.value !== dateString || isBookingLocked()) {
       return;
     }
     showAvailabilityMessage(error.message || "Pickup availability could not be loaded. Retry to try again.", dateString);
@@ -172,6 +243,7 @@ async function loadAvailability(dateString, alignToAvailable) {
 }
 
 function refreshSlots(dateString, alignToAvailable = false) {
+  if (isBookingLocked()) return;
   if (API_MODE) {
     loadAvailability(dateString, alignToAvailable);
   } else {
@@ -180,16 +252,17 @@ function refreshSlots(dateString, alignToAvailable = false) {
 }
 
 function isDateSlotBooked(dateString, slot) {
-  return API_MODE ? currentBookedSlots.has(slot) : isSlotBooked(dateString, slot);
+  return currentBookedSlots.has(slot);
 }
 
 export function renderSlots(alignToAvailable = false) {
+  if (isBookingLocked()) return;
   const dateString = pickupDateInput.value;
   if (API_MODE && loadedAvailabilityDate !== dateString) {
     return;
   }
 
-  const slots = getSlotsForDate();
+  const slots = getSlotsForDate(dateString);
   const selectedSlot = pickupSlotInput.value;
   const previousScrollLeft = slotGrid.scrollLeft;
   const weekend = isWeekend(dateString);
@@ -209,14 +282,20 @@ export function renderSlots(alignToAvailable = false) {
     button.dataset.slot = slot;
     button.disabled = booked || !inCurrentSchedule || expired;
     button.title = booked ? "Already booked" : !inCurrentSchedule ? "Coming soon" : expired ? "Slot expired" : "Open for booking";
+    button.setAttribute("aria-label", `${formatSlot(slot)}, ${state.toLowerCase()}`);
+    button.setAttribute("aria-pressed", String(slot === selectedSlot && !button.disabled));
 
     if (slot === selectedSlot && !button.disabled) {
       button.classList.add("selected");
     }
 
     button.addEventListener("click", () => {
+      if (isBookingLocked()) return;
+      refreshBookingWindow();
+      if (pickupDateInput.value !== dateString || isSlotClosed(dateString, slot)) return;
       pickupSlotInput.value = slot;
       renderSlots();
+      slotGrid.querySelector('[aria-pressed="true"]')?.focus({ preventScroll: true });
     });
 
     slotGrid.appendChild(button);
@@ -236,7 +315,7 @@ export function renderSlots(alignToAvailable = false) {
         const slotLeft = eveningSlot.getBoundingClientRect().left;
         slotGrid.scrollTo({
           left: Math.max(0, slotGrid.scrollLeft + slotLeft - gridLeft - 8),
-          behavior: "smooth",
+          behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
         });
       });
       slotGrid.appendChild(eveningJump);
@@ -268,19 +347,100 @@ function getBreakdownMarkup(details) {
     .join("");
 }
 
-export function updatePriceSummary() {
-  const details = getPriceDetails();
+function normalizedPhone(countryCode, phone) {
+  const code = String(countryCode || "").trim();
+  const digits = String(phone || "").replace(/\D/g, "");
+  const normalizedDigits = digits.startsWith("0") ? digits.slice(1) : digits;
+  return `${code}${normalizedDigits}`;
+}
+
+function estimateKey(details, phone) {
+  return `${phone}|${details.packageSize}|${details.service}|${details.hangers ? "1" : "0"}`;
+}
+
+function renderPriceSummary(details) {
   const breakdown = getBreakdownMarkup(details);
   expressPrice.textContent = `+${formatMoney(PRICING[details.packageSize].express)}`;
-  hangerPrice.textContent = `+${formatMoney(PRICING[details.packageSize].hanger)}`;
+  hangerPrice.textContent = PRICING[details.packageSize].hanger === 0 ? "Included" : `+${formatMoney(PRICING[details.packageSize].hanger)}`;
   totalPrice.textContent = formatMoney(details.total);
   priceBreakdown.innerHTML = breakdown;
   checkoutTotalPrice.textContent = formatMoney(details.total);
   checkoutPriceBreakdown.innerHTML = breakdown;
 }
 
+export function updatePriceSummary() {
+  const details = getPriceDetails();
+  const phone = normalizedPhone(countryCodeInput.value, customerPhoneInput.value);
+  const estimate = currentEstimate?.key === estimateKey(details, phone) ? currentEstimate : null;
+  renderPriceSummary(estimate ? { ...details, items: estimate.items, total: estimate.total } : details);
+}
+
+async function refreshEstimate(force = false) {
+  const details = getPriceDetails();
+  const phone = normalizedPhone(countryCodeInput.value, customerPhoneInput.value);
+  const key = estimateKey(details, phone);
+  if (!/^\+[1-9]\d{6,14}$/.test(phone)) throw new Error("Enter a valid phone number to get the server quote.");
+  if (!force && currentEstimate?.key === key) return currentEstimate;
+  if (!force && estimateInFlight?.key === key) return estimateInFlight.promise;
+  estimateController?.abort();
+  const controller = new AbortController();
+  estimateController = controller;
+  const requestId = ++estimateRequestId;
+  const promise = (async () => {
+    try {
+      const turnstileToken = await getTurnstileToken("estimate");
+      if (controller.signal.aborted) throw new DOMException("Quote was replaced", "AbortError");
+      const result = await apiRequest("/api/estimate", {
+        method: "POST", readOnly: true, signal: controller.signal,
+        headers: turnstileToken ? { "X-Turnstile-Token": turnstileToken } : {},
+        body: { phone, packageSize: details.packageSize, service: details.service, hangers: details.hangers },
+      });
+      if (requestId !== estimateRequestId || estimateKey(getPriceDetails(), normalizedPhone(countryCodeInput.value, customerPhoneInput.value)) !== key) {
+        throw new Error("Your details changed while the quote loaded. Review your details and try again.");
+      }
+      if (typeof result?.revision !== "string" || !result.revision || typeof result.total !== "number" || !Number.isFinite(result.total) || result.total < 0 || !Array.isArray(result.lines) || !result.lines.length || result.lines.some((line) => typeof line.label !== "string" || typeof line.amount !== "number" || !Number.isFinite(line.amount) || line.amount < 0) || Math.round(result.lines.reduce((total, line) => total + line.amount, 0) * 100) !== Math.round(result.total * 100)) {
+        throw new Error("The server quote could not be verified. Retry the quote before confirming.");
+      }
+      currentEstimate = {
+        key, revision: result.revision, total: result.total,
+        items: result.lines.map((line) => ({ label: line.label, amount: line.amount, included: line.amount === 0 })),
+      };
+      updatePriceSummary();
+      return currentEstimate;
+    } catch (error) {
+      if (requestId === estimateRequestId) {
+        currentEstimate = null;
+        updatePriceSummary();
+      }
+      throw error;
+    } finally {
+      if (estimateInFlight?.requestId === requestId) estimateInFlight = null;
+    }
+  })();
+  estimateInFlight = { key, requestId, promise };
+  return promise;
+}
+
+function scheduleEstimate() {
+  if (isBookingLocked()) return;
+  clearTimeout(estimateTimer);
+  estimateTimer = setTimeout(() => {
+    refreshEstimate().catch((error) => {
+      if (!isBookingLocked() && error.name !== "AbortError") showError(formError, `The server quote is unavailable. Retry before confirming. ${error.message}`);
+    });
+  }, 250);
+}
+
 export function resetBookingForm() {
+  if (isBookingLocked()) return false;
+  currentEstimate = null;
+  estimateRequestId += 1;
+  estimateController?.abort();
+  estimateInFlight = null;
+  clearTimeout(estimateTimer);
   bookingForm.reset();
+  pickupDateInput.min = getTodayString();
+  pickupDateInput.max = getMaxBookingDateString();
   pickupDateInput.value = getTodayString();
   pickupSlotInput.value = "";
   clearError(formError);
@@ -288,55 +448,102 @@ export function resetBookingForm() {
   renderCalendar();
   refreshSlots(pickupDateInput.value, true);
   updatePriceSummary();
+  return true;
 }
 
-function getApiBookingPayload(formData, details) {
-  const countryCode = formData.get("countryCode").trim();
-  const phoneDigits = formData.get("phone").replace(/\D/g, "");
-  const normalizedPhoneDigits = phoneDigits.startsWith("0") ? phoneDigits.slice(1) : phoneDigits;
+function getApiBookingPayload(formData) {
   return {
     name: formData.get("name").trim(),
-    phone: `${countryCode}${normalizedPhoneDigits}`,
+    phone: normalizedPhone(formData.get("countryCode"), formData.get("phone")),
     block: formData.get("block"),
     unit: formData.get("unit").trim(),
-    packageSize: details.packageSize,
-    service: details.service,
-    hangers: hangersInput.checked,
-    pickupDate: pickupDateInput.value,
-    pickupSlot: pickupSlotInput.value,
+    packageSize: Number(formData.get("packageSize")),
+    service: formData.get("service"),
+    hangers: formData.has("hangers"),
+    pickupDate: formData.get("pickupDate"),
+    pickupSlot: formData.get("pickupSlot"),
     paymentMethod: formData.get("paymentMethod"),
-    termsAccepted: termsAcceptedInput.checked,
+    termsAccepted: formData.has("termsAccepted"),
   };
 }
 
-async function submitApiBooking(formData, details, onBookingCreated) {
-  submitButton.disabled = true;
-  submitButton.setAttribute("aria-busy", "true");
+async function submitApiBooking(payload, signature, onBookingCreated) {
+  let sent = false;
+  let slotConflict = false;
   try {
+    if (!pendingBooking) {
+      const displayedTotal = Number(checkoutTotalPrice.textContent.replace(/^RM/, ""));
+      let estimate;
+      try {
+        estimate = await refreshEstimate();
+      } catch (error) {
+        throw new Error(`The server quote is unavailable. Retry the quote before confirming. ${error.message}`);
+      }
+      if (formSignature() !== signature || estimate?.key !== estimateKey(payload, payload.phone)) {
+        throw new Error("Your details changed while the quote loaded. Review the current details and try again.");
+      }
+      if (!Number.isFinite(displayedTotal) || Math.round(displayedTotal * 100) !== Math.round(estimate.total * 100)) {
+        reportBookingError(`Your server quote is ${formatMoney(estimate.total)}. Review the total and any fees, then confirm again.`);
+        return;
+      }
+      payload = { ...payload, priceRevision: estimate.revision, expectedTotalCents: Math.round(estimate.total * 100) };
+    }
+    const turnstileToken = await getTurnstileToken("booking");
+    if (!pendingBooking && formSignature() !== signature) throw new Error("Your details changed during verification. Review them and try again.");
+    if (!pendingBooking && (payload.pickupDate < getTodayString() || payload.pickupDate > getMaxBookingDateString() || isSlotClosed(payload.pickupDate, payload.pickupSlot))) {
+      slotConflict = true;
+      throw new Error("The pickup time expired during confirmation. Choose an available pickup slot.");
+    }
+    pendingBooking ||= { key: crypto.randomUUID(), payload: Object.freeze(payload) };
+    sent = true;
     const result = await apiRequest("/api/bookings", {
       method: "POST",
-      body: getApiBookingPayload(formData, details),
+      headers: {
+        "X-Idempotency-Key": pendingBooking.key,
+        ...(turnstileToken ? { "X-Turnstile-Token": turnstileToken } : {}),
+      },
+      body: pendingBooking.payload,
     });
-    if (!result?.booking || typeof result.trackingToken !== "string" || !result.trackingToken) {
-      throw new Error("The API returned an invalid booking response. The request could not be confirmed.");
+    if (!result?.booking || !/^LL-[A-F0-9]{8}$/.test(result.booking.number) || !/^[A-Za-z0-9_-]{43}$/.test(result.trackingToken) || !/^\d{4}-\d{2}-\d{2}$/.test(result.booking.pickupDate) || !getSlotsForDate(result.booking.pickupDate).includes(result.booking.pickupSlot) || typeof result.booking.total !== "number" || !Number.isFinite(result.booking.total) || result.booking.total < 0 || !PRICING[result.booking.packageSize] || typeof result.booking.readyTime !== "string") {
+      const error = new Error("The booking confirmation response could not be verified.");
+      error.outcomeUnknown = true;
+      throw error;
     }
     onBookingCreated(result.booking, result.trackingToken);
+    pendingBooking = null;
   } catch (error) {
-    const message = error.status === 503
-      ? "Public booking is currently disabled on the staging API. Nothing was submitted."
-      : error.message || "The staging API could not save this request. Nothing was submitted.";
-    showError(formError, message);
-    if (error.status === 409) {
-      refreshSlots(pickupDateInput.value, true);
+    if (pendingBooking && (!sent || error.outcomeUnknown || !error.status)) {
+      reportBookingError(`Your confirmation could not be verified; retry the same booking. It may already be saved. Your original details are protected until confirmation is recovered.${!sent ? ` ${error.message}` : ""}`);
+    } else {
+      if (sent) pendingBooking = null;
+      if (error.status === 409 && error.code === "quote_changed") {
+        currentEstimate = null;
+        try {
+          const estimate = await refreshEstimate(true);
+          reportBookingError(`The total has been updated to ${formatMoney(estimate.total)}. Review the updated quote and fees, then confirm again. Your pickup selection is unchanged.`);
+        } catch (quoteError) {
+          reportBookingError(`The quote changed, but the new quote could not be loaded. Retry before confirming. ${quoteError.message}`);
+        }
+      } else {
+        slotConflict ||= error.status === 409;
+        reportBookingError(error.status === 503 ? "Booking is currently unavailable. Please try again." : error.message || "The booking could not be confirmed. Please try again.");
+      }
     }
   } finally {
-    submitButton.disabled = false;
-    submitButton.removeAttribute("aria-busy");
+    submitting = false;
+    updateBookingControls();
+    if (slotConflict) {
+      pickupSlotInput.value = "";
+      refreshBookingWindow(true);
+      reportBookingError("That pickup slot could not be reserved. Your details are preserved; choose an available pickup slot before confirming again.");
+    }
   }
 }
 
 export function initializeBooking({ showView, onBookingCreated }) {
   checkoutButton.addEventListener("click", () => {
+    if (isBookingLocked() || !bookingEnabled) return;
+    refreshBookingWindow();
     clearError(bookingStepError);
     if (!pickupSlotInput.value || !isSlotInCurrentSchedule(pickupDateInput.value, pickupSlotInput.value)) {
       showError(bookingStepError, "Choose an available pickup slot before continuing.");
@@ -346,14 +553,24 @@ export function initializeBooking({ showView, onBookingCreated }) {
       showError(bookingStepError, "Pickup availability is still loading or unavailable. Retry availability before continuing.");
       return;
     }
+    checkoutPickupSummary.textContent = `${formatDate(pickupDateInput.value)} · ${formatSlot(pickupSlotInput.value)} MYT`;
     showView("checkout-view");
   });
 
-  packageInputs.forEach((input) => input.addEventListener("change", updatePriceSummary));
-  serviceInputs.forEach((input) => input.addEventListener("change", updatePriceSummary));
+  packageInputs.forEach((input) => input.addEventListener("change", () => {
+    updatePriceSummary();
+    scheduleEstimate();
+  }));
+  serviceInputs.forEach((input) => input.addEventListener("change", () => {
+    updatePriceSummary();
+    scheduleEstimate();
+  }));
   foldingInput.addEventListener("change", updatePriceSummary);
   ironingInput.addEventListener("change", updatePriceSummary);
-  hangersInput.addEventListener("change", updatePriceSummary);
+  hangersInput.addEventListener("change", () => {
+    updatePriceSummary();
+    scheduleEstimate();
+  });
   customerPhoneInput.addEventListener("input", () => {
     customerPhoneInput.value = customerPhoneInput.value.replace(/\D/g, "").slice(0, 12);
   });
@@ -361,9 +578,24 @@ export function initializeBooking({ showView, onBookingCreated }) {
     const digits = countryCodeInput.value.replace(/\D/g, "").slice(0, 4);
     countryCodeInput.value = digits ? `+${digits}` : "+";
   });
+  customerPhoneInput.addEventListener("blur", scheduleEstimate);
+  countryCodeInput.addEventListener("blur", scheduleEstimate);
 
   bookingForm.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (submitting) return;
+    if (!bookingEnabled && !pendingBooking) {
+      reportBookingError("Bookings are unavailable until the service configuration is verified. Retry from the home screen.");
+      return;
+    }
+    if (pendingBooking) {
+      submitting = true;
+      updateBookingControls();
+      clearError(formError);
+      await submitApiBooking(null, "", onBookingCreated);
+      return;
+    }
+    refreshBookingWindow();
     clearError(formError);
 
     if (!bookingForm.checkValidity()) {
@@ -388,49 +620,29 @@ export function initializeBooking({ showView, onBookingCreated }) {
       return;
     }
 
-    const formData = new FormData(bookingForm);
-    const details = getPriceDetails();
-    if (API_MODE) {
-      await submitApiBooking(formData, details, onBookingCreated);
-      return;
-    }
+    const payload = getApiBookingPayload(new FormData(bookingForm));
+    const signature = formSignature();
+    clearTimeout(estimateTimer);
+    submitting = true;
+    updateBookingControls();
+    await submitApiBooking(payload, signature, onBookingCreated);
+  });
 
-    const paymentMethod = formData.get("paymentMethod");
-    const countryCode = formData.get("countryCode").trim();
-    const phoneDigits = formData.get("phone").replace(/\D/g, "");
-    const normalizedPhoneDigits = phoneDigits.startsWith("0") ? phoneDigits.slice(1) : phoneDigits;
-    const createdAt = new Date().toISOString();
-    const booking = {
-      number: generateBookingNumber(),
-      name: formData.get("name").trim(),
-      phone: `${countryCode}${normalizedPhoneDigits}`,
-      block: formData.get("block"),
-      unit: formData.get("unit").trim(),
-      address: `${formData.get("block")}, Unit ${formData.get("unit").trim()}, Edumetro, USJ 1`,
-      packageSize: details.packageSize,
-      service: details.service,
-      folding: foldingInput.checked,
-      ironing: ironingInput.checked,
-      hangers: hangersInput.checked,
-      pickupDate: pickupDateInput.value,
-      pickupSlot: pickupSlotInput.value,
-      total: details.total,
-      paymentMethod,
-      paymentStatus: "unpaid",
-      termsAccepted: termsAcceptedInput.checked,
-      readyTime: expectedReadyTime(pickupDateInput.value, pickupSlotInput.value, details.service),
-      status: STATUS_STEPS[0],
-      statusHistory: [{ status: STATUS_STEPS[0], at: createdAt }],
-      createdAt,
-    };
-
-    try {
-      saveBooking(booking);
-    } catch {
-      showError(formError, "This browser could not save the demo request. Nothing was submitted.");
-      return;
-    }
-    onBookingCreated(booking, "");
+  recoveryResetButton.addEventListener("click", () => {
+    if (submitting || !pendingBooking) return;
+    if (!window.confirm("The original booking may already be saved. Retry the same booking first to recover confirmation. Editing now abandons that recovery and a new submission could create another booking. Do you acknowledge this risk and want to edit anyway?")) return;
+    pendingBooking = null;
+    currentEstimate = null;
+    updateBookingControls();
+    refreshBookingWindow(true);
+    reportBookingError("You acknowledged that the original booking may be saved. Check its status or contact Lazy Laundry before creating another booking.");
+    submitButton.focus();
+  });
+  bookingForm.addEventListener("reset", (event) => { if (isBookingLocked()) event.preventDefault(); });
+  window.addEventListener("focus", () => refreshBookingWindow());
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshBookingWindow(); });
+  window.addEventListener("beforeunload", (event) => {
+    if (isBookingLocked()) { event.preventDefault(); event.returnValue = ""; }
   });
 
   pickupDateInput.min = getTodayString();

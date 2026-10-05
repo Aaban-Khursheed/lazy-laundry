@@ -1,0 +1,42 @@
+.operator-queue-toolbar { display: flex; align-items: end; gap: 8px; flex-shrink: 0; }
+.operator-search-field { flex: 1; min-width: 0; }
+.operator-filter-field { width: 140px; flex-shrink: 0; }
+.operator-date-field { width: 144px; flex-shrink: 0; }
+.operator-queue-toolbar label { display: block; margin-bottom: 3px; color: #54564e; font-size: 12px; font-weight: 600; }
+.operator-queue-toolbar > .ui-button { flex-shrink: 0; }
+.operator-queue-toolbar .text-input { width: 100%; min-width: 0; }
+.operator-app .operator-queue-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 0; overflow: hidden; border: 1px solid var(--operator-border); border-radius: 8px; background: #fff; }
+.operator-panel-heading { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-height: 38px; padding: 8px 12px; flex-shrink: 0; border-bottom: 1px solid var(--operator-border); }
+.operator-panel-heading h2 { margin: 0; font-size: 14px; font-weight: 700; }
+.operator-panel-heading > span { color: var(--operator-muted); font-size: 12px; }
+.operator-booking-list { list-style: none; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; align-content: start; margin: 0; padding: 10px 12px; flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #d4d0c0 transparent; }
+.operator-booking-list:empty { flex: 0; padding: 0; }
+.operator-order-card { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 10px 12px; border: 1px solid var(--operator-border); border-radius: 10px; background: #fff; }
+.operator-order-card.is-open { border-color: #dcac00; box-shadow: 0 0 0 1px #dcac00; background: #fffdf5; }
+.operator-card-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 6px; }
+.operator-card-number { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #69644f; font-size: 12px; font-weight: 700; letter-spacing: 0.02em; }
+.operator-order-card .ui-badge { flex-shrink: 0; max-width: 55%; overflow: hidden; text-overflow: ellipsis; font-size: 10px; padding: 2px 6px; line-height: 1.3; }
+.operator-card-name { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 650; }
+.operator-card-location, .operator-card-service { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #606158; font-size: 12px; line-height: 1.35; }
+.operator-card-pickup { display: flex; flex-wrap: wrap; gap: 1px 5px; margin: 0; color: #383a32; font-size: 12px; font-weight: 650; }
+.operator-card-next { margin: 0; color: #875b07; font-size: 11px; line-height: 1.3; }
+.operator-card-bottom { display: flex; flex-direction: column; gap: 7px; margin-top: auto; padding-top: 6px; }
+.operator-card-total { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
+.operator-card-total strong { font-size: 14px; font-variant-numeric: tabular-nums; }
+.operator-card-total span { color: #606158; font-size: 11px; }
+.operator-card-actions { display: flex; gap: 6px; }
+.operator-card-actions .ui-button { flex: 1 1 0; min-width: 0; min-height: 32px; padding-left: 6px; padding-right: 6px; font-size: 12px; }
+.operator-list-loading { grid-column: 1 / -1; padding: 24px 16px; color: var(--operator-muted); font-size: 13px; }
+.operator-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; flex: 1; min-height: 0; padding: 24px 16px; text-align: center; }
+.operator-empty strong { font-size: 14px; }
+.operator-empty p { max-width: 280px; margin: 0; color: var(--operator-muted); font-size: 13px; }
+.operator-pagination { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-shrink: 0; padding: 7px 10px; border-top: 1px solid var(--operator-border); background: #fbfaf6; }
+#operator-page-info { color: var(--operator-muted); font-size: 12px; text-align: center; }
+
+@media (min-width: 1200px) {
+  .operator-booking-list { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+@media (min-width: 1440px) {
+  .operator-booking-list { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+}
