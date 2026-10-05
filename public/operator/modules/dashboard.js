@@ -1,10 +1,10 @@
 import { apiRequest } from "../../shared/api.js";
 import { PAYMENT_LABELS, PRICING, SERVICE_LABELS } from "../../shared/constants.js";
-import { clearError, escapeHtml, formatDate, formatMoney, formatSlot, getSlotsForDate, isSlotClosed, showError } from "../../shared/utils.js";
+import { clearError, escapeHtml, formatAdminTimestamp, formatDate, formatMoney, formatSlot, getSlotsForDate, isSlotClosed, promoDiscountPreview, showError } from "../../shared/utils.js";
 import { applyVariants } from "../../shared/variants.js";
 import { getEligibility, renderDetail, renderDetailFailure, renderDetailPlaceholder, renderQueue, summarizeBookings } from "./components.js";
 import { cancelOperatorDialog, requestActionDialog, requestDiscardDialog, requestOperatorDialog } from "./dialogs.js";
-import { assertBooking, exportOperatorBookings, saveOperatorAction } from "./actions.js";
+import { assertBooking, exportOperatorBookings, saveOperatorAction, savePromotion } from "./actions.js";
 
 const PAGE_SIZE = 10;
 const DRAWER_TABS = ["overview", "booking", "activity"];
@@ -40,6 +40,11 @@ let listController = null;
 let detailController = null;
 let exportController = null;
 let searchTimer = null;
+let operatorView = "queue";
+let promos = [];
+let promosLoaded = false;
+let promoBusy = false;
+let editingPromo = null;
 
 function desktopAvailable() {
   return enabled && window.matchMedia("(min-width: 1024px)").matches;
@@ -112,7 +117,7 @@ function describeOperatorEdit(booking, values) {
   const tier = PRICING[Number(values.packageSize)];
   if (tier && (Number(values.packageSize) !== booking.packageSize || values.service !== booking.service || values.hangers !== (booking.hangers === true))) {
     const serviceTotal = tier.base + (values.service === "express" ? tier.express : 0) + (values.hangers === true ? tier.hanger : 0);
-    const newTotal = serviceTotal + Number(booking.feeTotal || 0);
+    const newTotal = serviceTotal - promoDiscountPreview(booking.promo, Math.round(serviceTotal * 100)) / 100 + Number(booking.feeTotal || 0);
     parts.push(`Total: ${formatMoney(Number(booking.total))} → ${formatMoney(newTotal)}`);
   }
   return parts.join(" · ") || "Details updated";
@@ -688,7 +693,7 @@ export function initializeOperator() {
   if (!window.matchMedia("(min-width: 1024px)").matches || !document.querySelector("#operator-view")) return;
   enabled = true;
   if (initialized) return;
-  elements = Object.fromEntries(Object.entries({ list: "operator-booking-list", empty: "operator-empty", emptyDescription: "operator-empty-description", detail: "operator-detail", drawer: "operator-drawer", drawerTabs: "operator-drawer-tabs", backList: "operator-back-list", drawerRefresh: "operator-drawer-refresh", feedback: "operator-feedback", success: "operator-success", filter: "operator-filter", search: "operator-search", date: "operator-date", pending: "operator-pending-count", active: "operator-active-count", unpaid: "operator-unpaid-count", collected: "operator-collected-total", summary: "operator-summary", summaryHelp: "operator-summary-help", refresh: "operator-refresh", export: "operator-export", prev: "operator-prev", next: "operator-next", pageInfo: "operator-page-info", results: "operator-results-count", scope: "operator-data-scope", updated: "operator-last-updated", mobileDraft: "operator-mobile-draft-warning", help: "operator-workspace-help" }).map(([key, id]) => [key, document.getElementById(id)]));
+  elements = Object.fromEntries(Object.entries({ list: "operator-booking-list", empty: "operator-empty", emptyDescription: "operator-empty-description", detail: "operator-detail", drawer: "operator-drawer", drawerTabs: "operator-drawer-tabs", backList: "operator-back-list", drawerRefresh: "operator-drawer-refresh", feedback: "operator-feedback", success: "operator-success", filter: "operator-filter", search: "operator-search", date: "operator-date", pending: "operator-pending-count", active: "operator-active-count", unpaid: "operator-unpaid-count", collected: "operator-collected-total", summary: "operator-summary", summaryHelp: "operator-summary-help", refresh: "operator-refresh", export: "operator-export", prev: "operator-prev", next: "operator-next", pageInfo: "operator-page-info", results: "operator-results-count", scope: "operator-data-scope", updated: "operator-last-updated", mobileDraft: "operator-mobile-draft-warning", help: "operator-workspace-help", viewQueue: "operator-queue-view", viewPromos: "operator-promos", promoForm: "operator-promo-form", promoList: "operator-promo-list", promoEmpty: "operator-promo-empty", promoError: "operator-promo-error", promoSuccess: "operator-promo-success", promoSubmit: "operator-promo-submit", promoFormTitle: "operator-promo-form-title", promoCancelEdit: "operator-promo-cancel-edit", promoRefresh: "operator-promo-refresh", promoValueLabel: "promo-value-label", promoUpdated: "operator-promos-updated" }).map(([key, id]) => [key, document.getElementById(id)]));
   if (Object.values(elements).some((element) => !element)) { enabled = false; elements = null; return; }
   initialized = true;
   elements.filter.addEventListener("change", () => changeView(inputFilters()));
@@ -789,6 +794,36 @@ export function initializeOperator() {
     event.preventDefault();
     event.returnValue = "";
   });
+  document.querySelectorAll("[data-operator-view]").forEach((link) => {
+    link.addEventListener("click", (event) => {
+      event.preventDefault();
+      if (!desktopAvailable()) return;
+      switchOperatorView(link.dataset.operatorView);
+    });
+  });
+  elements.promoForm.addEventListener("submit", submitPromoForm);
+  elements.promoForm.kind.addEventListener("change", syncPromoValueInput);
+  elements.promoCancelEdit.addEventListener("click", () => {
+    if (promoBusy) return;
+    clearPromoFeedback();
+    resetPromoForm();
+  });
+  elements.promoRefresh.addEventListener("click", () => {
+    if (promoBusy) return;
+    clearPromoFeedback();
+    loadPromotions();
+  });
+  elements.promoList.addEventListener("click", async (event) => {
+    const edit = event.target.closest("[data-promo-edit]");
+    const toggle = event.target.closest("[data-promo-toggle]");
+    if (!desktopAvailable() || promoBusy) return;
+    if (edit) {
+      clearPromoFeedback();
+      prefillPromoForm(promos.find((promo) => promo.id === edit.dataset.promoEdit));
+    } else if (toggle) {
+      await togglePromo(toggle.dataset.promoToggle);
+    }
+  });
   elements.export.addEventListener("click", async () => {
     if (!desktopAvailable() || exportController || busy || transitionPending) return;
     const controller = new AbortController();
@@ -811,6 +846,213 @@ export function initializeOperator() {
       }
     }
   });
+}
+
+function toDateTimeLocal(iso) {
+  if (!iso) return "";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Kuala_Lumpur", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(date).replace(" ", "T");
+}
+
+function switchOperatorView(name) {
+  operatorView = name === "promos" ? "promos" : "queue";
+  elements.viewQueue.hidden = operatorView !== "queue";
+  elements.viewPromos.hidden = operatorView !== "promos";
+  document.querySelectorAll("[data-operator-view]").forEach((link) => {
+    const current = link.dataset.operatorView === operatorView;
+    link.classList.toggle("operator-nav-current", current);
+    if (current) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  });
+  if (operatorView === "promos" && !promosLoaded && !promoBusy) loadPromotions();
+}
+
+function clearPromoFeedback() {
+  elements.promoError.hidden = true;
+  elements.promoError.textContent = "";
+  elements.promoSuccess.hidden = true;
+  elements.promoSuccess.textContent = "";
+}
+
+function updatePromoControls() {
+  elements.promoSubmit.disabled = promoBusy;
+  elements.promoRefresh.disabled = promoBusy;
+}
+
+function syncPromoValueInput() {
+  const fixed = elements.promoForm.kind.value === "fixed";
+  elements.promoValueLabel.textContent = fixed ? "Amount off (RM)" : "Percent off";
+  elements.promoForm.value.min = fixed ? "1" : "1";
+  elements.promoForm.value.max = fixed ? "500" : "90";
+  elements.promoForm.value.step = fixed ? "0.01" : "1";
+}
+
+function resetPromoForm() {
+  editingPromo = null;
+  elements.promoForm.reset();
+  syncPromoValueInput();
+  elements.promoFormTitle.textContent = "New promotion";
+  elements.promoSubmit.textContent = "Create promotion";
+  elements.promoCancelEdit.hidden = true;
+}
+
+function prefillPromoForm(promo) {
+  if (!promo) return;
+  editingPromo = promo;
+  const form = elements.promoForm;
+  form.code.value = promo.code;
+  form.description.value = promo.description || "";
+  form.kind.value = promo.kind;
+  syncPromoValueInput();
+  form.value.value = promo.value;
+  form.minService.value = promo.minService > 0 ? promo.minService : "";
+  form.maxRedemptions.value = promo.maxRedemptions ?? "";
+  form.active.checked = promo.active === true;
+  form.startsAt.value = toDateTimeLocal(promo.startsAt);
+  form.endsAt.value = toDateTimeLocal(promo.endsAt);
+  elements.promoFormTitle.textContent = `Edit ${promo.code}`;
+  elements.promoSubmit.textContent = "Update promotion";
+  elements.promoCancelEdit.hidden = false;
+  form.code.focus();
+}
+
+function renderPromotions() {
+  elements.promoList.innerHTML = "";
+  elements.promoEmpty.hidden = promos.length > 0;
+  for (const promo of promos) {
+    const item = document.createElement("li");
+    item.className = "operator-promo-item";
+    const uses = promo.maxRedemptions === null ? `${promo.redemptions} used` : `${promo.redemptions}/${promo.maxRedemptions} used`;
+    const windowLabel = promo.startsAt || promo.endsAt
+      ? `${promo.startsAt ? formatAdminTimestamp(promo.startsAt) : "any time"} → ${promo.endsAt ? formatAdminTimestamp(promo.endsAt) : "open-ended"}`
+      : "no window";
+    item.innerHTML = `
+      <div class="operator-promo-item-main">
+        <strong class="operator-promo-code">${escapeHtml(promo.code)}</strong>
+        <span data-ui="badge" data-tone="${promo.active ? "success" : "neutral"}">${promo.active ? "Live" : "Off"}</span>
+      </div>
+      <p class="operator-promo-meta">${promo.kind === "percent" ? `${promo.value}% off` : `${formatMoney(promo.value)} off`}${promo.minService > 0 ? ` · min ${formatMoney(promo.minService)} order` : ""} · ${uses} · ${windowLabel}</p>
+      ${promo.description ? `<p class="operator-promo-desc">${escapeHtml(promo.description)}</p>` : ""}
+      <div class="operator-promo-actions">
+        <button type="button" data-ui="button" data-intent="secondary" data-size="sm" data-promo-edit="${escapeHtml(promo.id)}">Edit</button>
+        <button type="button" data-ui="button" data-intent="${promo.active ? "danger" : "secondary"}" data-size="sm" data-promo-toggle="${escapeHtml(promo.id)}">${promo.active ? "Deactivate" : "Activate"}</button>
+      </div>`;
+    elements.promoList.appendChild(item);
+  }
+}
+
+async function loadPromotions() {
+  if (!desktopAvailable() || promoBusy) return;
+  promoBusy = true;
+  updatePromoControls();
+  clearError(elements.promoError);
+  elements.promoError.hidden = true;
+  try {
+    const result = await apiRequest("/api/operator/promotions", { method: "GET", credentials: "include" });
+    if (!Array.isArray(result?.promotions)) throw new Error("The operator API returned an invalid promotions response.");
+    promos = result.promotions;
+    promosLoaded = true;
+    if (editingPromo) {
+      const fresh = promos.find((promo) => promo.id === editingPromo.id);
+      if (fresh) editingPromo = fresh;
+      else resetPromoForm();
+    }
+    renderPromotions();
+    elements.promoUpdated.textContent = `Updated ${new Date().toLocaleTimeString("en-MY", { hour: "numeric", minute: "2-digit" })}`;
+  } catch (error) {
+    if (error.name !== "AbortError") showError(elements.promoError, error.message || "Promotions could not be loaded.");
+  } finally {
+    promoBusy = false;
+    updatePromoControls();
+  }
+}
+
+function promoFormFields() {
+  const form = elements.promoForm;
+  return {
+    code: form.code.value.trim().toUpperCase(),
+    description: form.description.value.trim(),
+    kind: form.kind.value,
+    value: Number(form.value.value),
+    minService: form.minService.value === "" ? 0 : Number(form.minService.value),
+    maxRedemptions: form.maxRedemptions.value === "" ? null : Number(form.maxRedemptions.value),
+    active: form.active.checked,
+    startsAt: form.startsAt.value || null,
+    endsAt: form.endsAt.value || null,
+  };
+}
+
+async function submitPromoForm(event) {
+  event.preventDefault();
+  if (!desktopAvailable() || promoBusy) return;
+  const form = elements.promoForm;
+  if (!form.reportValidity()) return;
+  const fields = promoFormFields();
+  if (!/^[A-Z0-9]{3,32}$/.test(fields.code)) {
+    showError(elements.promoError, "Codes use 3–32 letters and numbers only.");
+    return;
+  }
+  const confirm = await requestOperatorDialog({
+    title: editingPromo ? `Update ${editingPromo.code}?` : `Create ${fields.code}?`,
+    description: editingPromo
+      ? "Changes apply to new checkout quotes immediately. Orders already placed keep the discount they recorded."
+      : "The code applies at checkout as soon as it is saved. Confirm the details are final.",
+    submit: editingPromo ? "Update promotion" : "Create promotion",
+    context: `${fields.kind === "percent" ? `${fields.value}% off` : `${formatMoney(fields.value)} off`}${fields.minService > 0 ? ` · min ${formatMoney(fields.minService)} order` : ""}`,
+    eyebrow: "Promotion",
+  });
+  if (confirm === null) return;
+  promoBusy = true;
+  updatePromoControls();
+  clearPromoFeedback();
+  try {
+    const saved = await savePromotion(fields, editingPromo);
+    elements.promoSuccess.hidden = false;
+    elements.promoSuccess.textContent = editingPromo ? `${saved.code} updated — new quotes use it immediately.` : `${saved.code} saved — customers can apply it at checkout${saved.active ? " now" : " once it goes live"}.`;
+    resetPromoForm();
+  } catch (error) {
+    showError(elements.promoError, error.message || "The promotion could not be saved.");
+    promoBusy = false;
+    updatePromoControls();
+    return;
+  }
+  promoBusy = false;
+  updatePromoControls();
+  await loadPromotions();
+}
+
+async function togglePromo(id) {
+  const promo = promos.find((entry) => entry.id === id);
+  if (!promo || promoBusy || !desktopAvailable()) return;
+  const confirm = await requestOperatorDialog({
+    title: promo.active ? `Deactivate ${promo.code}?` : `Activate ${promo.code}?`,
+    description: promo.active
+      ? "New checkout quotes stop applying this code immediately. Orders already placed keep the discount they recorded."
+      : "The code applies at checkout as soon as it is saved.",
+    submit: promo.active ? "Deactivate" : "Activate",
+    danger: promo.active,
+    context: promo.kind === "percent" ? `${promo.value}% off` : `${formatMoney(promo.value)} off`,
+    eyebrow: "Promotion",
+  });
+  if (confirm === null) return;
+  promoBusy = true;
+  updatePromoControls();
+  clearPromoFeedback();
+  try {
+    await savePromotion({ active: !promo.active }, promo);
+    elements.promoSuccess.hidden = false;
+    elements.promoSuccess.textContent = `${promo.code} ${promo.active ? "deactivated — new quotes no longer apply it" : "activated — it applies at checkout now"}.`;
+    if (editingPromo?.id === promo.id) editingPromo.active = !promo.active;
+  } catch (error) {
+    showError(elements.promoError, error.message || "The promotion could not be updated.");
+    promoBusy = false;
+    updatePromoControls();
+    return;
+  }
+  promoBusy = false;
+  updatePromoControls();
+  await loadPromotions();
 }
 
 export function suspendOperator() {

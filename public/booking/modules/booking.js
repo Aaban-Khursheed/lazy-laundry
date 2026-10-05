@@ -40,6 +40,9 @@ const bookingStepError = document.querySelector("#booking-step-error");
 const termsAcceptedInput = document.querySelector("#terms-accepted");
 const countryCodeInput = document.querySelector("#customer-country-code");
 const customerPhoneInput = document.querySelector("#customer-phone");
+const promoInput = document.querySelector("#customer-promo");
+const promoApplyButton = document.querySelector("#promo-apply");
+const promoNote = document.querySelector("#promo-note");
 const formError = document.querySelector("#form-error");
 const submitButton = bookingForm.querySelector('[type="submit"]');
 
@@ -150,6 +153,7 @@ function getPriceDetails() {
     packageSize,
     service,
     hangers: hangersInput.checked,
+    promoCode: currentPromoCode(),
     items,
     total: items.reduce((sum, item) => sum + item.amount, 0),
   };
@@ -342,9 +346,25 @@ export function renderSlots(alignToAvailable = false) {
 function getBreakdownMarkup(details) {
   return details.items
     .map(
-      (item) => `<div class="breakdown-row"><span>${escapeHtml(item.label)}</span><strong>${item.included ? "Included" : formatMoney(item.amount)}</strong></div>`,
+      (item) => `<div class="breakdown-row${item.promo ? " breakdown-row-promo" : ""}"><span>${escapeHtml(item.label)}</span><strong>${item.included ? "Included" : item.amount < 0 ? `−${formatMoney(-item.amount)}` : formatMoney(item.amount)}</strong></div>`,
     )
     .join("");
+}
+
+function renderPromoNote(estimate) {
+  if (!promoNote) return;
+  const promo = estimate?.promo;
+  if (!promo) {
+    promoNote.hidden = true;
+    promoNote.textContent = "";
+    promoNote.classList.remove("promo-note-error");
+    return;
+  }
+  promoNote.hidden = false;
+  promoNote.classList.toggle("promo-note-error", !promo.applied);
+  promoNote.textContent = promo.applied
+    ? `${promo.code} applied — you save ${formatMoney(Number(promo.discount) || 0)}.`
+    : promo.message || "That code is not valid for this order.";
 }
 
 function normalizedPhone(countryCode, phone) {
@@ -354,8 +374,12 @@ function normalizedPhone(countryCode, phone) {
   return `${code}${normalizedDigits}`;
 }
 
+function currentPromoCode() {
+  return (promoInput?.value || "").trim().toUpperCase();
+}
+
 function estimateKey(details, phone) {
-  return `${phone}|${details.packageSize}|${details.service}|${details.hangers ? "1" : "0"}`;
+  return `${phone}|${details.packageSize}|${details.service}|${details.hangers ? "1" : "0"}|${details.promoCode || ""}`;
 }
 
 function renderPriceSummary(details) {
@@ -373,6 +397,7 @@ export function updatePriceSummary() {
   const phone = normalizedPhone(countryCodeInput.value, customerPhoneInput.value);
   const estimate = currentEstimate?.key === estimateKey(details, phone) ? currentEstimate : null;
   renderPriceSummary(estimate ? { ...details, items: estimate.items, total: estimate.total } : details);
+  renderPromoNote(estimate);
 }
 
 async function refreshEstimate(force = false) {
@@ -393,17 +418,18 @@ async function refreshEstimate(force = false) {
       const result = await apiRequest("/api/estimate", {
         method: "POST", readOnly: true, signal: controller.signal,
         headers: turnstileToken ? { "X-Turnstile-Token": turnstileToken } : {},
-        body: { phone, packageSize: details.packageSize, service: details.service, hangers: details.hangers },
+        body: { phone, packageSize: details.packageSize, service: details.service, hangers: details.hangers, promoCode: details.promoCode || undefined },
       });
       if (requestId !== estimateRequestId || estimateKey(getPriceDetails(), normalizedPhone(countryCodeInput.value, customerPhoneInput.value)) !== key) {
         throw new Error("Your details changed while the quote loaded. Review your details and try again.");
       }
-      if (typeof result?.revision !== "string" || !result.revision || typeof result.total !== "number" || !Number.isFinite(result.total) || result.total < 0 || !Array.isArray(result.lines) || !result.lines.length || result.lines.some((line) => typeof line.label !== "string" || typeof line.amount !== "number" || !Number.isFinite(line.amount) || line.amount < 0) || Math.round(result.lines.reduce((total, line) => total + line.amount, 0) * 100) !== Math.round(result.total * 100)) {
+      if (typeof result?.revision !== "string" || !result.revision || typeof result.total !== "number" || !Number.isFinite(result.total) || result.total < 0 || !Array.isArray(result.lines) || !result.lines.length || result.lines.some((line) => typeof line.label !== "string" || typeof line.amount !== "number" || !Number.isFinite(line.amount) || (line.amount < 0 && line.key !== "promo") || (line.amount >= 0 && line.key === "promo")) || Math.round(result.lines.reduce((total, line) => total + line.amount, 0) * 100) !== Math.round(result.total * 100)) {
         throw new Error("The server quote could not be verified. Retry the quote before confirming.");
       }
       currentEstimate = {
         key, revision: result.revision, total: result.total,
-        items: result.lines.map((line) => ({ label: line.label, amount: line.amount, included: line.amount === 0 })),
+        promo: result.promo && typeof result.promo === "object" ? result.promo : null,
+        items: result.lines.map((line) => ({ label: line.label, amount: line.amount, included: line.amount === 0, promo: line.key === "promo" })),
       };
       updatePriceSummary();
       return currentEstimate;
@@ -445,6 +471,7 @@ export function resetBookingForm() {
   pickupSlotInput.value = "";
   clearError(formError);
   clearError(bookingStepError);
+  renderPromoNote(null);
   renderCalendar();
   refreshSlots(pickupDateInput.value, true);
   updatePriceSummary();
@@ -463,6 +490,7 @@ function getApiBookingPayload(formData) {
     pickupDate: formData.get("pickupDate"),
     pickupSlot: formData.get("pickupSlot"),
     paymentMethod: formData.get("paymentMethod"),
+    promoCode: (formData.get("promoCode") || "").trim().toUpperCase(),
     termsAccepted: formData.has("termsAccepted"),
   };
 }
@@ -580,6 +608,23 @@ export function initializeBooking({ showView, onBookingCreated }) {
   });
   customerPhoneInput.addEventListener("blur", scheduleEstimate);
   countryCodeInput.addEventListener("blur", scheduleEstimate);
+  promoInput?.addEventListener("input", () => {
+    renderPromoNote(null);
+    if (/^\+[1-9]\d{6,14}$/.test(normalizedPhone(countryCodeInput.value, customerPhoneInput.value))) scheduleEstimate();
+  });
+  promoInput?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      promoApplyButton?.click();
+    }
+  });
+  promoApplyButton?.addEventListener("click", () => {
+    if (isBookingLocked()) return;
+    promoApplyButton.disabled = true;
+    refreshEstimate(true)
+      .catch((error) => { if (error.name !== "AbortError") showError(formError, `The server quote is unavailable. Retry before confirming. ${error.message}`); })
+      .finally(() => { promoApplyButton.disabled = false; });
+  });
 
   bookingForm.addEventListener("submit", async (event) => {
     event.preventDefault();

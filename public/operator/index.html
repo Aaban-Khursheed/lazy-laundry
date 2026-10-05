@@ -25,7 +25,10 @@
       <aside class="operator-sidebar" aria-label="Workspace navigation">
         <a class="brand" href="https://lazylaundry.me/" aria-label="Lazy Laundry customer site"><span class="brand-script">Lazy</span><span class="brand-name">LAUNDRY</span></a>
         <span class="operator-sidebar-label">OPERATIONS</span>
-        <nav aria-label="Operator"><a class="operator-nav-current" href="#operator-view" aria-current="page">Booking queue</a></nav>
+        <nav aria-label="Operator">
+          <a class="operator-nav-current" href="#operator-view" data-operator-view="queue" aria-current="page">Booking queue</a>
+          <a href="#operator-promos" data-operator-view="promos">Promotions</a>
+        </nav>
         <a class="operator-customer-link" href="https://lazylaundry.me/">Customer website <span aria-hidden="true">↗</span></a>
       </aside>
 
@@ -35,6 +38,7 @@
           <div class="operator-topbar-meta"><span data-ui="badge" data-tone="neutral">Private workspace</span><span>MYT</span></div>
         </header>
         <main id="operator-view" aria-labelledby="operator-title">
+          <div id="operator-queue-view">
           <div class="operator-page-heading"><h1 id="operator-title">Booking queue</h1><span class="operator-snapshot" id="operator-last-updated" role="status">Waiting for bookings</span></div>
           <div class="form-error" id="operator-feedback" role="alert" hidden></div>
           <p class="operator-success" id="operator-success" role="status" hidden></p>
@@ -72,6 +76,35 @@
               <nav class="operator-pagination" aria-label="Queue pages"><button type="button" id="operator-prev" data-ui="button" data-intent="secondary" data-size="sm" disabled>Previous</button><span id="operator-page-info" role="status" tabindex="-1">No results loaded</span><button type="button" id="operator-next" data-ui="button" data-intent="secondary" data-size="sm" disabled>Next</button></nav>
             </section>
           </div>
+          </div>
+        <section id="operator-promos" aria-labelledby="operator-promos-title" hidden>
+          <div class="operator-page-heading"><h1 id="operator-promos-title">Promotions</h1><span class="operator-snapshot" id="operator-promos-updated" role="status">Not loaded</span></div>
+          <div class="form-error" id="operator-promo-error" role="alert" hidden></div>
+          <p class="operator-success" id="operator-promo-success" role="status" hidden></p>
+          <p class="operator-data-scope">Codes apply at checkout as soon as they go live. Discounts cut the service total only — fees are never discounted. Ending a code stops new quotes; orders already placed keep the discount they recorded.</p>
+
+          <section class="operator-promo-card" data-ui="surface" data-tone="paper" data-padding="md">
+            <div class="operator-panel-heading"><h2 id="operator-promo-form-title">New promotion</h2><button type="button" id="operator-promo-cancel-edit" data-ui="button" data-intent="ghost" data-size="sm" hidden>Cancel edit</button></div>
+            <form id="operator-promo-form" class="operator-promo-form">
+              <div class="operator-field"><label for="promo-code">Code</label><input class="text-input" id="promo-code" name="code" type="text" required maxlength="32" pattern="[A-Za-z0-9]{3,32}" autocomplete="off" spellcheck="false" placeholder="WELCOME10" /></div>
+              <div class="operator-field"><label for="promo-description">Description</label><input class="text-input" id="promo-description" name="description" type="text" maxlength="200" autocomplete="off" placeholder="Internal note" /></div>
+              <div class="operator-field"><label for="promo-kind">Discount type</label><select class="text-input" id="promo-kind" name="kind"><option value="percent">Percent off</option><option value="fixed">Fixed amount off</option></select></div>
+              <div class="operator-field"><label for="promo-value" id="promo-value-label">Percent off</label><input class="text-input" id="promo-value" name="value" type="number" required min="1" max="90" step="1" inputmode="numeric" /></div>
+              <div class="operator-field"><label for="promo-min">Minimum order (RM)</label><input class="text-input" id="promo-min" name="minService" type="number" min="0" max="500" step="0.01" inputmode="decimal" placeholder="0.00" /></div>
+              <div class="operator-field"><label for="promo-max">Max uses</label><input class="text-input" id="promo-max" name="maxRedemptions" type="number" min="1" max="100000" step="1" inputmode="numeric" placeholder="Unlimited" /></div>
+              <div class="operator-field"><label for="promo-starts">Starts (MYT)</label><input class="text-input" id="promo-starts" name="startsAt" type="datetime-local" /></div>
+              <div class="operator-field"><label for="promo-ends">Ends (MYT)</label><input class="text-input" id="promo-ends" name="endsAt" type="datetime-local" /></div>
+              <div class="operator-field operator-field-check"><label for="promo-active"><input id="promo-active" name="active" type="checkbox" checked /> Live immediately</label></div>
+              <div class="operator-promo-submit"><button type="submit" id="operator-promo-submit" data-ui="button" data-intent="primary" data-size="md">Create promotion</button></div>
+            </form>
+          </section>
+
+          <section class="operator-promo-card" data-ui="surface" data-tone="paper" data-padding="sm" aria-labelledby="operator-promo-list-title">
+            <div class="operator-panel-heading"><h2 id="operator-promo-list-title">Codes</h2><button type="button" id="operator-promo-refresh" data-ui="button" data-intent="secondary" data-size="sm">Refresh</button></div>
+            <ol class="operator-promo-list" id="operator-promo-list"></ol>
+            <div class="operator-empty" id="operator-promo-empty" role="status" hidden><strong>No promotions yet</strong><p>Create a code above — it applies at checkout immediately.</p></div>
+          </section>
+        </section>
         </main>
         <footer class="site-footer operator-footer"><span>LAZY LAUNDRY · OPERATIONS</span><span>Private workspace</span></footer>
       </div>

@@ -8,7 +8,11 @@ import worker, {
   isScheduledSlot,
   isValidDate,
   makeTrackingToken,
+  normalizePromoCode,
   priceInCents,
+  promoDiscountCents,
+  promoEligibility,
+  promoStoredValue,
 } from "../api/worker.js";
 
 function localDateAfter(days) {
@@ -441,5 +445,62 @@ describe("modular frontend asset isolation", () => {
       const response = await worker.fetch(new Request(`http://${host}:8787${path}`), env);
       expect(response.status).toBe(404);
     }
+  });
+});
+
+describe("promotion rules", () => {
+  const promo = (overrides = {}) => ({
+    kind: "percent",
+    value: 10,
+    min_service_cents: 0,
+    max_redemptions: null,
+    redemptions: 0,
+    active: 1,
+    starts_at: null,
+    ends_at: null,
+    ...overrides,
+  });
+
+  it("normalizes promo codes to uppercase and rejects malformed input", () => {
+    expect(normalizePromoCode("  welcome10 ")).toBe("WELCOME10");
+    expect(normalizePromoCode("ab")).toBe("");
+    expect(normalizePromoCode("has space")).toBe("");
+    expect(normalizePromoCode("BAD!CODE")).toBe("");
+    expect(normalizePromoCode(undefined)).toBe("");
+    expect(normalizePromoCode(42)).toBe("");
+  });
+
+  it("computes percent and fixed discounts in integer sen, capped at the service total", () => {
+    expect(promoDiscountCents(promo({ value: 10 }), 2999)).toBe(299);
+    expect(promoDiscountCents(promo({ value: 33 }), 2999)).toBe(989);
+    expect(promoDiscountCents(promo({ kind: "fixed", value: 500 }), 2999)).toBe(500);
+    expect(promoDiscountCents(promo({ kind: "fixed", value: 9999 }), 2999)).toBe(2999);
+    expect(promoDiscountCents(promo({ value: 95 }), 10000)).toBe(9000);
+  });
+
+  it("rejects inactive, expired, not-started, and under-minimum codes", () => {
+    expect(promoEligibility(promo({ active: 0 }), 2999)).toBe("inactive");
+    expect(promoEligibility(promo({ ends_at: "2000-01-01T00:00:00.000Z" }), 2999)).toBe("expired");
+    expect(promoEligibility(promo({ starts_at: "2999-01-01T00:00:00.000Z" }), 2999)).toBe("not_started");
+    expect(promoEligibility(promo({ min_service_cents: 3000 }), 2999)).toBe("below_minimum");
+    expect(promoEligibility(null, 2999)).toBe("unknown");
+    expect(promoEligibility(promo(), 2999)).toBeNull();
+  });
+
+  it("enforces redemption limits only when redeeming", () => {
+    const limited = promo({ max_redemptions: 2, redemptions: 2 });
+    expect(promoEligibility(limited, 2999)).toBeNull();
+    expect(promoEligibility(limited, 2999, { forRedemption: true })).toBe("exhausted");
+    expect(promoEligibility(promo({ max_redemptions: 3, redemptions: 2 }), 2999, { forRedemption: true })).toBeNull();
+  });
+
+  it("bounds stored promo values by kind", () => {
+    expect(promoStoredValue("percent", 10)).toBe(10);
+    expect(promoStoredValue("percent", 91)).toBeNull();
+    expect(promoStoredValue("percent", 0)).toBeNull();
+    expect(promoStoredValue("fixed", 5)).toBe(500);
+    expect(promoStoredValue("fixed", 5.55)).toBe(555);
+    expect(promoStoredValue("fixed", 0.5)).toBeNull();
+    expect(promoStoredValue("fixed", 600)).toBeNull();
   });
 });

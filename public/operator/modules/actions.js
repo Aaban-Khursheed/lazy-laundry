@@ -53,6 +53,18 @@ export async function saveOperatorAction(kind, action, booking, fields = {}, pen
   throw new Error("Unsupported operator action.");
 }
 
+export async function savePromotion(fields, editing = null) {
+  const path = editing ? `/api/operator/promotions/${encodeURIComponent(editing.id)}` : "/api/operator/promotions";
+  const body = editing ? { revision: editing.revision, fields } : fields;
+  const result = await apiRequest(path, { method: editing ? "PATCH" : "POST", credentials: "include", body, timeoutMs: 15000 });
+  return validateMutation(() => {
+    if (!result?.promotion || typeof result.promotion.id !== "string" || !Number.isInteger(result.promotion.revision)) {
+      throw new Error("The operator API returned an invalid promotion response.");
+    }
+    return result.promotion;
+  });
+}
+
 export async function exportOperatorBookings(status, signal, date = "") {
   const controller = new AbortController();
   const abort = () => controller.abort();

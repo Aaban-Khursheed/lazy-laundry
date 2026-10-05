@@ -94,3 +94,12 @@ export function formatAdminTimestamp(value) {
   if (Number.isNaN(date.getTime())) return "Time not recorded";
   return new Intl.DateTimeFormat("en-MY", { dateStyle: "medium", timeStyle: "short" }).format(date);
 }
+
+export function promoDiscountPreview(promo, serviceCents) {
+  if (!promo || promo.active === false) return 0;
+  const now = new Date().toISOString();
+  if ((promo.startsAt && promo.startsAt > now) || (promo.endsAt && promo.endsAt < now)) return 0;
+  if (serviceCents < Math.round((promo.minService || 0) * 100)) return 0;
+  const raw = promo.kind === "percent" ? Math.floor(serviceCents * Math.min(promo.value, 90) / 100) : Math.round(promo.value * 100);
+  return Math.max(0, Math.min(serviceCents, raw));
+}

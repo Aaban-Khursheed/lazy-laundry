@@ -18,6 +18,7 @@ import {
   getSlotsForDate,
   getTodayString,
   isSlotClosed,
+  promoDiscountPreview,
   showError,
 } from "./utils.js";
 
@@ -141,6 +142,7 @@ export function renderConfirmation(booking, trackingToken = "") {
     <div class="order-meta-row"><span>Expected ready</span><strong>${escapeHtml(booking.readyTime)}</strong></div>
     <div class="order-meta-row"><span>Included and extras</span><strong>${escapeHtml(extras.join(", ") || "Standard package")}</strong></div>
     <div class="order-meta-row"><span>Payment</span><strong>${escapeHtml(PAYMENT_LABELS[booking.paymentMethod] || "Cash or QR at pickup")}</strong></div>
+    ${booking.discount > 0 ? `<div class="order-meta-row order-meta-discount"><span>Promotion ${escapeHtml(booking.promoCode || "")}</span><strong>−${formatMoney(Number(booking.discount))}</strong></div>` : ""}
     <div class="order-meta-row confirmation-total-row"><span>Total</span><strong>${formatMoney(Number(booking.total))}</strong></div>
   `;
   document.querySelector("#copy-tracking-token").addEventListener("click", copyActiveTrackingLink);
@@ -256,6 +258,7 @@ function renderTrackingResult(booking, credentials, phone = "") {
       <div class="order-meta">
         <div class="order-meta-row"><span>Pickup</span><strong>${escapeHtml(formatDate(booking.pickupDate))}, ${escapeHtml(formatSlot(booking.pickupSlot))}</strong></div>
         <div class="order-meta-row"><span>Expected ready</span><strong>${escapeHtml(booking.readyTime)}</strong></div>
+        ${booking.discount > 0 ? `<div class="order-meta-row order-meta-discount"><span>Promotion ${escapeHtml(booking.promoCode || "")}</span><strong>−${formatMoney(Number(booking.discount))}</strong></div>` : ""}
         <div class="order-meta-row"><span>Total</span><strong>${formatMoney(Number(booking.total))}</strong></div>
       </div>
       <p class="tracking-current-status ${cancelled ? "cancelled" : ""}" role="status"><strong>Current status</strong><span class="${badgeVariants({ tone: cancelled ? "danger" : "info" })}">${escapeHtml(booking.status || STATUS_STEPS[0])}</span></p>
@@ -426,7 +429,8 @@ function updateEditTotal(panel, original) {
   if (!total) return;
   const cents = editTotalCents(panel.querySelector("#tracking-edit-package")?.value, panel.querySelector("#tracking-edit-service")?.value, panel.querySelector("#tracking-edit-hangers")?.checked);
   if (cents === null) { total.textContent = ""; return; }
-  const next = cents / 100 + Number(original.feeTotal || 0);
+  const discountCents = promoDiscountPreview(original.promo, cents);
+  const next = (cents - discountCents) / 100 + Number(original.feeTotal || 0);
   total.textContent = Math.abs(next - Number(original.total)) > 0.001
     ? `New total ${formatMoney(next)} — was ${formatMoney(Number(original.total))}. The updated price is collected at pickup.`
     : `Total ${formatMoney(next)} — unchanged.`;
@@ -445,6 +449,7 @@ function renderEditPanel(context, edit) {
       <div class="order-meta-row"><span>Expected ready</span><strong>${escapeHtml(edit.readyTime)}</strong></div>
       <div class="order-meta-row"><span>Status</span><strong>${escapeHtml(edit.status)}</strong></div>
       <div class="order-meta-row"><span>Service area</span><strong>Edumetro, USJ 1</strong></div>
+      ${edit.discount > 0 ? `<div class="order-meta-row order-meta-discount"><span>Promotion ${escapeHtml(edit.promoCode || "")}</span><strong>−${formatMoney(Number(edit.discount))}</strong></div>` : ""}
     </div>
     <p class="tracking-local-note">Save applies immediately and is recorded. Use Reschedule for a different pickup time.</p>
     <label class="field-label" for="tracking-edit-name">Customer name</label>
@@ -531,7 +536,7 @@ function customerEditSummary(values, baseline) {
   if (["folding", "ironing", "hangers"].some((key) => values[key] !== baseline?.[key])) parts.push("Finish options updated");
   const cents = editTotalCents(values.packageSize, values.service, values.hangers);
   if (cents !== null) {
-    const next = cents / 100 + Number(baseline?.feeTotal || 0);
+    const next = (cents - promoDiscountPreview(baseline?.promo, cents)) / 100 + Number(baseline?.feeTotal || 0);
     if (Math.abs(next - Number(baseline?.total)) > 0.001) parts.push(`Total ${formatMoney(Number(baseline.total))} → ${formatMoney(next)}`);
   }
   return parts.join(" · ");
