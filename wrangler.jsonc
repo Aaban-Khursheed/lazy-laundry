@@ -22,21 +22,34 @@
   },
   "vars": {
     "ENVIRONMENT": "production",
-    "PUBLIC_BOOKING_ENABLED": "false",
+    "PUBLIC_BOOKING_ENABLED": "true",
     "PRICE_REVISION": "launch-v1",
-    "TURNSTILE_SITEKEY": "",
+    "TURNSTILE_SITEKEY": "0x4AAAAAAFOOEDMJ3lnxqDaX",
     "CUSTOMER_HOSTS": "lazylaundry.me,www.lazylaundry.me",
     "TURNSTILE_HOSTNAMES": "lazylaundry.me,www.lazylaundry.me",
     "OPERATOR_HOST": "ops.lazylaundry.me",
     "OPERATOR_ALLOWED_EMAILS": "25087560@imail.sunway.edu.my",
     "SERVICE_TIMEZONE": "Asia/Kuala_Lumpur"
   },
+  "workers_dev": true,
+  "routes": [
+    { "pattern": "lazylaundry.me", "custom_domain": true },
+    { "pattern": "www.lazylaundry.me", "custom_domain": true },
+    { "pattern": "ops.lazylaundry.me", "custom_domain": true }
+  ],
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "lazy-laundry-production",
-      "database_id": "REPLACE_BEFORE_DEPLOY",
+      "database_name": "lazylaundry-db",
+      "database_id": "5c0ae934-9fb6-4ed9-ae9d-79353b8f1714",
       "migrations_dir": "api/migrations"
+    }
+  ],
+  "ratelimits": [
+    {
+      "name": "RATE_LIMITER",
+      "namespace_id": "1001",
+      "simple": { "limit": 100, "period": 60 }
     }
   ],
   "env": {
