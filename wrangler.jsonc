@@ -24,7 +24,7 @@
     "ENVIRONMENT": "production",
     "PUBLIC_BOOKING_ENABLED": "false",
     "PRICE_REVISION": "launch-v1",
-    "TURNSTILE_SITEKEY": "",
+    "TURNSTILE_SITEKEY": "0x4AAAAAAFOOEDMJ3lnxqDaX",
     "CUSTOMER_HOSTS": "lazylaundry.me,www.lazylaundry.me",
     "TURNSTILE_HOSTNAMES": "lazylaundry.me,www.lazylaundry.me",
     "OPERATOR_HOST": "ops.lazylaundry.me",
