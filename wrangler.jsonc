@@ -35,7 +35,7 @@
     {
       "binding": "DB",
       "database_name": "lazy-laundry-production",
-      "database_id": "REPLACE_BEFORE_DEPLOY",
+      "database_id": "5c0ae934-9fb6-4ed9-ae9d-79353b8f1714",
       "migrations_dir": "api/migrations"
     }
   ],
