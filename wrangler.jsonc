@@ -31,6 +31,7 @@
     "OPERATOR_ALLOWED_EMAILS": "25087560@imail.sunway.edu.my",
     "SERVICE_TIMEZONE": "Asia/Kuala_Lumpur"
   },
+  "workers_dev": true,
   "routes": [
     { "pattern": "lazylaundry.me", "custom_domain": true },
     { "pattern": "www.lazylaundry.me", "custom_domain": true },
