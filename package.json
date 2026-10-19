@@ -6,12 +6,12 @@
     "node": ">=24"
   },
   "scripts": {
-    "build:ui": "esbuild ui/variants.js --bundle --format=esm --target=es2022 --minify --legal-comments=none --outfile=public/shared/variants.js",
+    "build:ui": "esbuild src/booking/app.js src/operator/app.js --bundle --format=esm --target=es2022 --minify --legal-comments=none --outbase=src --outdir=public",
     "predev": "npm run build:ui",
     "dev": "wrangler dev --env local",
     "pretest:e2e": "npm run build:ui",
-    "predeploy:dry-run": "npm run build:ui",
-    "predeploy": "npm run build:ui",
+    "predeploy:dry-run": "npm run build:ui && npm run lint && npm run test",
+    "predeploy": "npm run build:ui && npm run lint && npm run test",
     "lint": "eslint .",
     "test": "vitest run",
     "test:e2e": "playwright test",

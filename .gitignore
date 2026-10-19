@@ -8,3 +8,5 @@ test-results/
 coverage/
 .DS_Store
 public/shared/variants.js
+public/booking/app.js
+public/operator/app.js

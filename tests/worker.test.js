@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatSlot, getTodayString, isWeekend as clientIsWeekend, isSlotClosed as clientIsSlotClosed } from "../public/booking/modules/utils.js";
+import { formatSlot, getTodayString, isWeekend as clientIsWeekend, isSlotClosed as clientIsSlotClosed } from "../src/booking/modules/utils.js";
 import worker, {
   canonicalize,
   csvCell,
@@ -421,11 +421,12 @@ describe("modular frontend asset isolation", () => {
 
   it("serves each application's stylesheet and the shared CVA bundle", async () => {
     for (const [host, path] of [
+      ["localhost", "/booking/app.js"],
       ["localhost", "/booking/styles/layout.css"],
-      ["ops.localhost", "/operator/modules/dashboard.js"],
+      ["ops.localhost", "/operator/app.js"],
       ["ops.localhost", "/operator/styles/workspace.css"],
-      ["localhost", "/shared/variants.js"],
-      ["ops.localhost", "/shared/variants.js"],
+      ["localhost", "/shared/styles.css"],
+      ["ops.localhost", "/shared/styles.css"],
     ]) {
       const response = await worker.fetch(new Request(`http://${host}:8787${path}`), env);
       expect(response.status).toBe(200);
@@ -435,12 +436,12 @@ describe("modular frontend asset isolation", () => {
 
   it("does not let either host load the other application's modules", async () => {
     for (const [host, path] of [
-      ["localhost", "/operator/modules/dashboard.js"],
+      ["localhost", "/operator/app.js"],
+      ["localhost", "/operator/index.html"],
       ["localhost", "/operator/styles.css"],
-      ["localhost", "/booking/modules/operator.js"],
-      ["ops.localhost", "/booking/modules/booking.js"],
-      ["ops.localhost", "/booking/modules/operator.js"],
-      ["ops.localhost", "/booking/modules/api.js"],
+      ["ops.localhost", "/booking/app.js"],
+      ["ops.localhost", "/booking/index.html"],
+      ["ops.localhost", "/booking/styles.css"],
     ]) {
       const response = await worker.fetch(new Request(`http://${host}:8787${path}`), env);
       expect(response.status).toBe(404);

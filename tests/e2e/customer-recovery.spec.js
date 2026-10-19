@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { getMaxBookingDateString, getSlotsForDate } from "../../public/shared/utils.js";
+import { getMaxBookingDateString, getSlotsForDate } from "../../src/shared/utils.js";
 
 const token = "t".repeat(43);
 const number = "LL-AB12CD34";

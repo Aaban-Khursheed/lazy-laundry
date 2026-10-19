@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { getMaxBookingDateString } from "../../public/shared/utils.js";
+import { getMaxBookingDateString } from "../../src/shared/utils.js";
 
 const operatorURL = "http://ops.localhost:8787";
 const sampleBooking = {
