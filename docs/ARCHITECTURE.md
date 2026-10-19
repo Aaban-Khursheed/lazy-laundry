@@ -67,7 +67,7 @@ files in `tests/worker.test.js`.
 | `GET /api/config` | — | `bookingEnabled`, `priceRevision`, `turnstileSiteKey`, `bookingLeadMinutes` |
 | `GET /api/availability?date=` | rate limit | booked slots; KL date, 7-day window |
 | `POST /api/estimate` | rate limit + Turnstile(`estimate`) | server-authoritative quote incl. outstanding penalty fees + promo preview |
-| `POST /api/bookings` | rate limit + Turnstile(`booking`) + `X-Idempotency-Key` + `PUBLIC_BOOKING_ENABLED` | transactional slot reservation, see below |
+| `POST /api/bookings` | rate limit (100/min + stricter 5/min `RATE_LIMITER_BOOKING`) + Turnstile(`booking`) + `X-Idempotency-Key` + `PUBLIC_BOOKING_ENABLED` + per-phone active cap | transactional slot reservation, see below |
 | `POST /api/track` | rate limit | booking number + tracking token (hash-compared); PII-stripped response |
 | `POST /api/bookings/:num/cancel` | rate limit + Turnstile(`cancel`) + token + phone | late-cancel penalty logic |
 | `POST /api/bookings/:num/reschedule` | rate limit + Turnstile(`reschedule`) + token + phone | slot re-reservation |
@@ -118,15 +118,24 @@ Migrations (`api/migrations/`) are additive and **not undone by rollback**.
 `createBooking` ordering (`api/worker.js`):
 
 1. rate limit → Turnstile → idempotency-key format → payload validation.
+   `POST /api/bookings` additionally enforces `RATE_LIMITER_BOOKING`
+   (5/min per IP) on top of the general `RATE_LIMITER` (100/min) — the
+   write path gets a stricter budget than reads.
 2. Idempotent replay (IETF Idempotency-Key draft semantics): the fingerprint is the SHA-256 of the canonical client-supplied fields only, never server-derived values such as `readyAt` or totals. Same key + same fingerprint → 201 with the stored booking and the re-issued token; same key + different fingerprint → 422 `idempotency_key_reused`.
 3. `PUBLIC_BOOKING_ENABLED` gate (503 when off) → slot window check: KL date within 7 days and pickup at least `BOOKING_LEAD_MINUTES` (default 60) away; the operator may use any slot that has not started.
-4. One `env.DB.batch`: customer upsert → penalty-balance zero guarded by
-   `changes()=1` → booking `INSERT … WHERE` slot/promo/balance guards → promo
+4. Per-phone active cap: a phone may hold at most `ACTIVE_BOOKING_LIMIT`
+   (default 2) bookings in `confirmed`/`pickup_on_the_way`/`laundry_picked_up`/
+   `processing`/`ready`. A pre-check returns 409 `active_booking_limit`
+   early; the same `COUNT(*) < limit` predicate is repeated inside the
+   `INSERT … WHERE` so a raced request cannot exceed the cap, and a `changes()=0`
+   insert is re-classified by re-reading the count.
+5. One `env.DB.batch`: customer upsert → penalty-balance zero guarded by
+   `changes()=1` → booking `INSERT … WHERE` slot/promo/balance/cap guards → promo
    redemption increment → penalty allocation → status + audit events.
-5. Any unique-constraint violation first re-runs the replay lookup, so an overlapping identical retry that lost the race receives the winner's booking. Only when no booking exists for the key does a `(pickup_date, pickup_slot)` violation return 409 `slot_taken`.
-6. `expectedTotalCents` / `priceRevision` mismatch → 409 `quote_changed` —
+6. Any unique-constraint violation first re-runs the replay lookup, so an overlapping identical retry that lost the race receives the winner's booking. Only when no booking exists for the key does a `(pickup_date, pickup_slot)` violation return 409 `slot_taken`.
+7. `expectedTotalCents` / `priceRevision` mismatch → 409 `quote_changed` —
    the client must re-show the server quote before retrying.
-Error codes: `quote_changed` (409, includes fee-balance changes), `slot_taken` (409), `slot_unavailable` (409), `idempotency_key_reused` (422).
+Error codes: `quote_changed` (409, includes fee-balance changes), `slot_taken` (409), `slot_unavailable` (409), `active_booking_limit` (409), `idempotency_key_reused` (422).
 
 ## Tracking-token model
 

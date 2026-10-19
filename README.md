@@ -152,6 +152,14 @@ Structured `console.error` events worth alerting on / grepping in Logs:
   test pin the contract (express 6h, standard 12h or 15h for evening
   pickups). Change it only with an owner decision — the tracking page shows
   this time as a commitment.
+- **Active bookings are capped at 2 per phone number.** `ACTIVE_BOOKING_LIMIT`
+  is enforced twice: a pre-check for the friendly error, and a `COUNT(*)`
+  guard inside the insert transaction so concurrent requests can't exceed it.
+  Only `confirmed`→`ready` statuses count — cancelled and delivered free the
+  slot. `POST /api/bookings` also gets its own stricter rate limiter
+  (`RATE_LIMITER_BOOKING`, 5/min/IP) on top of the general one. Raise the cap
+  by changing the var, not the code — it is deliberately a var so a real
+  customer who needs a third concurrent booking can be accommodated quickly.
 - **Customer PII is anonymized 24 months after a booking reaches a terminal
   state** (the privacy notice's published window). The `*/15` cron runs
   `runRetentionPass`: name/phone/block/unit become sentinels, audit

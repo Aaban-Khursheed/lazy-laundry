@@ -23,6 +23,11 @@ function fakeDB() {
     bind: (...next) => statement(sql, next),
     async first() {
       if (sql.includes("WHERE idempotency_key_hash = ?")) return byKey.get(params[0]) ?? null;
+      if (sql.includes("COUNT(*) AS n FROM bookings")) {
+        const n = [...byId.values()].filter((r) => r.phone === params[0]
+          && ["confirmed", "pickup_on_the_way", "laundry_picked_up", "processing", "ready"].includes(r.status)).length;
+        return { n };
+      }
       if (sql.includes("FROM customers WHERE id = ?")) return null;
       if (sql.includes("SELECT * FROM bookings WHERE id = ?")) return byId.get(params[0]) ?? null;
       throw new Error(`Unexpected first(): ${sql}`);

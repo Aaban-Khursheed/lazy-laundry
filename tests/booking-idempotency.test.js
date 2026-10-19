@@ -5,9 +5,12 @@ const KEY = "audit-retry-key-0000000001";
 const OTHER_KEY = "other-retry-key-0000000001";
 const encryptionKey = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
 
+const ACTIVE_STATUSES = ["confirmed", "pickup_on_the_way", "laundry_picked_up", "processing", "ready"];
+
 function fakeDB() {
   const byKey = new Map();
   const byId = new Map();
+  const activeCountFor = (phone) => [...byId.values()].filter((r) => r.phone === phone && ACTIVE_STATUSES.includes(r.status)).length;
   const statement = (sql, params = []) => ({
     sql,
     params,
@@ -20,6 +23,14 @@ function fakeDB() {
         }
         return byKey.get(params[0]) ?? null;
       }
+      if (sql.includes("COUNT(*) AS n FROM bookings")) {
+        if (db.frozenCount !== null) {
+          const n = db.frozenCount;
+          db.frozenCount = null;
+          return { n };
+        }
+        return { n: activeCountFor(params[0]) };
+      }
       if (sql.includes("FROM customers WHERE id = ?")) return null;
       if (sql.includes("SELECT * FROM bookings WHERE id = ?")) return byId.get(params[0]) ?? null;
       throw new Error(`Unexpected first(): ${sql}`);
@@ -30,25 +41,31 @@ function fakeDB() {
   });
   const db = {
     hiddenLookups: 0,
+    frozenCount: null,
     byId,
     prepare: (sql) => statement(sql),
     async batch(statements) {
-      const p = statements.find((s) => s.sql.includes("INSERT INTO bookings")).params;
+      const insert = statements.find((s) => s.sql.includes("INSERT INTO bookings"));
+      const p = insert.params;
       if ([...byId.values()].some((row) => row.pickup_date === p[14] && row.pickup_slot === p[15])) {
         throw new Error("D1_ERROR: UNIQUE constraint failed: bookings.pickup_date, bookings.pickup_slot: SQLITE_CONSTRAINT");
       }
       if (byKey.has(p[4])) throw new Error("UNIQUE constraint failed: bookings.idempotency_key_hash");
-      const row = {
-        id: p[0], booking_number: p[1], tracking_token_hash: p[2], encrypted_tracking_token: p[3],
-        idempotency_key_hash: p[4], request_payload_hash: p[5], customer_id: p[6], customer_name: p[7],
-        phone: p[8], block: p[9], unit: p[10], package_size: p[11], service: p[12], folding: 1, ironing: 1,
-        hangers: p[13], pickup_date: p[14], pickup_slot: p[15], service_total_cents: p[16], fee_total_cents: p[17],
-        total_cents: p[18], payment_method: p[19], promo_code: p[20], discount_cents: p[21], ready_at: p[22],
-        payment_status: "unpaid", status: "confirmed", revision: 1, terms_accepted: 1, created_at: p[25], updated_at: p[26],
-      };
-      byKey.set(row.idempotency_key_hash, row);
-      byId.set(row.id, row);
-      return statements.map(() => ({ meta: { changes: 1 } }));
+      // The last two insert binds are the in-transaction cap (phone, limit).
+      const capBlocked = activeCountFor(p[p.length - 2]) >= p[p.length - 1];
+      if (!capBlocked) {
+        const row = {
+          id: p[0], booking_number: p[1], tracking_token_hash: p[2], encrypted_tracking_token: p[3],
+          idempotency_key_hash: p[4], request_payload_hash: p[5], customer_id: p[6], customer_name: p[7],
+          phone: p[8], block: p[9], unit: p[10], package_size: p[11], service: p[12], folding: 1, ironing: 1,
+          hangers: p[13], pickup_date: p[14], pickup_slot: p[15], service_total_cents: p[16], fee_total_cents: p[17],
+          total_cents: p[18], payment_method: p[19], promo_code: p[20], discount_cents: p[21], ready_at: p[22],
+          payment_status: "unpaid", status: "confirmed", revision: 1, terms_accepted: 1, created_at: p[25], updated_at: p[26],
+        };
+        byKey.set(row.idempotency_key_hash, row);
+        byId.set(row.id, row);
+      }
+      return statements.map((s) => ({ meta: { changes: s === insert && capBlocked ? 0 : 1 } }));
     },
   };
   return db;
@@ -154,6 +171,66 @@ describe("booking idempotency", () => {
       error: "This retry key was already used for a different booking",
       code: "idempotency_key_reused",
     });
+  });
+});
+
+describe("per-phone active booking cap", () => {
+  afterEach(() => vi.useRealTimers());
+
+  const postAt = (db, slot, key, overrides = {}) => post(db, "2026-10-21", slot, key, overrides);
+
+  it("rejects a third active booking for the same phone", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const db = fakeDB();
+    vi.setSystemTime(new Date("2026-10-20T12:00:00+08:00"));
+    expect((await postAt(db, "19:00", KEY)).status).toBe(201);
+    expect((await postAt(db, "20:00", OTHER_KEY)).status).toBe(201);
+
+    const third = await postAt(db, "21:00", "third-retry-key-000000001");
+    expect(third.status).toBe(409);
+    expect(await third.json()).toEqual({
+      error: "You already have 2 active bookings. Wait for one to be completed or cancel it before booking again.",
+      code: "active_booking_limit",
+    });
+  });
+
+  it("counts only active statuses — a cancelled booking frees capacity", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const db = fakeDB();
+    vi.setSystemTime(new Date("2026-10-20T12:00:00+08:00"));
+    expect((await postAt(db, "19:00", KEY)).status).toBe(201);
+    expect((await postAt(db, "20:00", OTHER_KEY)).status).toBe(201);
+    for (const row of db.byId.values()) row.status = "cancelled";
+
+    const third = await postAt(db, "21:00", "third-retry-key-000000001");
+    expect(third.status).toBe(201);
+  });
+
+  it("does not affect other phone numbers", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const db = fakeDB();
+    vi.setSystemTime(new Date("2026-10-20T12:00:00+08:00"));
+    expect((await postAt(db, "19:00", KEY)).status).toBe(201);
+    expect((await postAt(db, "20:00", OTHER_KEY)).status).toBe(201);
+
+    const other = await postAt(db, "21:00", "third-retry-key-000000001", { phone: "+60987654321" });
+    expect(other.status).toBe(201);
+  });
+
+  it("the in-transaction guard catches a count that changes after the pre-check", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const db = fakeDB();
+    vi.setSystemTime(new Date("2026-10-20T12:00:00+08:00"));
+    expect((await postAt(db, "19:00", KEY)).status).toBe(201);
+    expect((await postAt(db, "20:00", OTHER_KEY)).status).toBe(201);
+    // Simulate a raced pre-check: the count read is stale (0) while the
+    // write-time count is already at the limit.
+    db.frozenCount = 0;
+
+    const raced = await postAt(db, "21:00", "third-retry-key-000000001");
+    expect(raced.status).toBe(409);
+    expect((await raced.json()).code).toBe("active_booking_limit");
+    expect([...db.byId.values()].filter((r) => r.status === "confirmed")).toHaveLength(2);
   });
 });
 

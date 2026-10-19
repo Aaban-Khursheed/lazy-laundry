@@ -153,11 +153,12 @@ function mutationRequestError(request) {
   return null;
 }
 
-async function enforceRateLimit(request, env, route) {
-  if (!env.RATE_LIMITER) return { ok: env.ENVIRONMENT === "local", configured: false };
+async function enforceRateLimit(request, env, route, binding = "RATE_LIMITER") {
+  const limiter = env[binding];
+  if (!limiter) return { ok: env.ENVIRONMENT === "local", configured: false };
   const ip = request.headers.get("CF-Connecting-IP") || request.headers.get("X-Forwarded-For")?.split(",")[0]?.trim() || "unknown";
   try {
-    const result = await env.RATE_LIMITER.limit({ key: await sha256(`${route}:${ip}`) });
+    const result = await limiter.limit({ key: await sha256(`${route}:${ip}`) });
     return { ok: result?.success === true, configured: true };
   } catch {
     return { ok: false, configured: true };
@@ -268,6 +269,15 @@ function bookingLeadMinutes(env) {
   const raw = String(env?.BOOKING_LEAD_MINUTES ?? "").trim();
   const value = /^\d{1,4}$/.test(raw) ? Number(raw) : Number.NaN;
   return value <= 1440 ? value : DEFAULT_BOOKING_LEAD_MINUTES;
+}
+
+const DEFAULT_ACTIVE_BOOKING_LIMIT = 2;
+const ACTIVE_BOOKING_STATUSES = "('confirmed', 'pickup_on_the_way', 'laundry_picked_up', 'processing', 'ready')";
+
+function activeBookingLimit(env) {
+  const raw = String(env?.ACTIVE_BOOKING_LIMIT ?? "").trim();
+  const value = /^\d{1,2}$/.test(raw) ? Number(raw) : DEFAULT_ACTIVE_BOOKING_LIMIT;
+  return Math.min(10, Math.max(1, value));
 }
 
 function isPickupSlotAvailable(dateString, slot, leadMinutes = DEFAULT_BOOKING_LEAD_MINUTES) {
@@ -762,6 +772,8 @@ async function replayIdempotentBooking(env, keyHash, payloadHash, cors) {
 async function createBooking(request, env, cors, ctx) {
   const limit = await enforceRateLimit(request, env, "booking");
   if (!limit.ok) return rateLimitFailure(limit, cors);
+  const postLimit = await enforceRateLimit(request, env, "booking_post", "RATE_LIMITER_BOOKING");
+  if (!postLimit.ok) return rateLimitFailure(postLimit, cors);
   if (!await verifyTurnstile(request, env, "booking")) {
     return jsonResponse({ error: "Verification failed" }, 403, cors);
   }
@@ -785,6 +797,16 @@ async function createBooking(request, env, cors, ctx) {
     return jsonResponse({ error: "The pickup slot is no longer available", code: "slot_unavailable" }, 409, cors);
   }
   const customerId = customerIdForPhone(booking.phone);
+  const activeLimit = activeBookingLimit(env);
+  const activeCount = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM bookings WHERE phone = ? AND status IN ${ACTIVE_BOOKING_STATUSES}`,
+  ).bind(booking.phone).first();
+  if (Number(activeCount?.n) >= activeLimit) {
+    return jsonResponse({
+      error: `You already have ${activeLimit} active bookings. Wait for one to be completed or cancel it before booking again.`,
+      code: "active_booking_limit",
+    }, 409, cors);
+  }
   const existingCustomer = await env.DB.prepare("SELECT penalty_balance_cents FROM customers WHERE id = ?").bind(customerId).first();
   const feeTotalCents = Number(existingCustomer?.penalty_balance_cents) || 0;
   const createdAt = new Date().toISOString();
@@ -834,13 +856,14 @@ async function createBooking(request, env, cors, ctx) {
         SELECT 1 FROM promotions WHERE code = ? AND active = 1
           AND (max_redemptions IS NULL OR redemptions < max_redemptions)
       ))
+      AND (SELECT COUNT(*) FROM bookings WHERE phone = ? AND status IN ${ACTIVE_BOOKING_STATUSES}) < ?
   `).bind(
     id, bookingNumber, trackingTokenHash, encryptedTrackingToken, keyHash, payloadHash, customerId,
     booking.name, booking.phone, booking.block, booking.unit, booking.packageSize, booking.service,
     booking.hangers ? 1 : 0, booking.pickupDate, booking.pickupSlot, booking.serviceTotalCents,
     feeTotalCents, totalCents, booking.paymentMethod, appliedPromo?.code || null, discountCents,
     booking.readyAt, createdAt, env.TERMS_POLICY_VERSION || "launch-v1", createdAt, createdAt,
-    feeTotalCents, appliedPromo?.code || null, appliedPromo?.code || null
+    feeTotalCents, appliedPromo?.code || null, appliedPromo?.code || null, booking.phone, activeLimit
   );
   statements.push(bookingStatement);
   const bookingResultIndex = statements.length - 1;
@@ -872,6 +895,15 @@ async function createBooking(request, env, cors, ctx) {
     if (bookingResult?.meta?.changes !== 1) {
       if (appliedPromo) return jsonResponse({ error: "That promo code is no longer available", code: "quote_changed" }, 409, cors);
       if (feeTotalCents > 0) return jsonResponse({ error: "The fee balance changed; refresh checkout and try again", code: "quote_changed" }, 409, cors);
+      const nowActive = await env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM bookings WHERE phone = ? AND status IN ${ACTIVE_BOOKING_STATUSES}`,
+      ).bind(booking.phone).first();
+      if (Number(nowActive?.n) >= activeLimit) {
+        return jsonResponse({
+          error: `You already have ${activeLimit} active bookings. Wait for one to be completed or cancel it before booking again.`,
+          code: "active_booking_limit",
+        }, 409, cors);
+      }
       throw new Error("Booking insert did not change a row");
     }
     if (appliedPromo && results[bookingResultIndex + 1]?.meta?.changes !== 1) {
