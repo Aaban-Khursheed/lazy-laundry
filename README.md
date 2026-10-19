@@ -33,10 +33,10 @@ failure-mode contract, decision records: **`docs/ARCHITECTURE.md`**.
 
 `BOOKING_LEAD_MINUTES` (default 60) is the minimum notice before pickup for customer bookings and reschedules; the operator may schedule any slot that has not started.
 
-**Optional vars:** `TERMS_POLICY_VERSION` (defaults to `launch-v1`) — bump it
-with each legal-page revision so `terms_accepted_at`/`terms_policy_version`
-records stay meaningful. `CUSTOMER_ORIGIN`, `OPERATOR_ORIGIN` extend CORS
-origins if ever needed.
+`TERMS_POLICY_VERSION` is currently `launch-v2` — bump it with each legal-page
+revision so `terms_accepted_at`/`terms_policy_version` records stay
+meaningful. `CUSTOMER_ORIGIN`, `OPERATOR_ORIGIN` extend CORS origins if ever
+needed.
 
 **Secrets** (set via `wrangler secret put`, never committed):
 
