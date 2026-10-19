@@ -440,7 +440,7 @@ test("late availability responses cannot replace choices for a newly selected da
 });
 
 test("closed same-day reschedule slots are omitted and rollover refreshes the chooser", async ({ page }) => {
-  await page.clock.install({ time: new Date("2026-10-04T12:50:00Z") });
+  await page.clock.install({ time: new Date("2026-10-04T11:50:00Z") });
   await fixtures(page);
   await lookup(page);
   await verifyPhone(page, "reschedule");
@@ -453,6 +453,18 @@ test("closed same-day reschedule slots are omitted and rollover refreshes the ch
   await expect(page.locator("#tracking-reschedule-date")).toHaveValue("2026-10-05");
   await expect(page.locator('[data-customer-action="reschedule"]')).toBeEnabled();
   expect(await page.locator("#tracking-reschedule-slot option").evaluateAll((options) => options.map((option) => option.value))).toEqual(["19:00", "20:00", "21:00"]);
+});
+
+test("same-day slots inside the configured booking notice are closed and the notice is shown", async ({ page }) => {
+  await page.clock.install({ time: new Date("2026-10-05T10:00:00Z") });
+  await fixtures(page, { config: (route) => route.fulfill({ json: { bookingEnabled: true, turnstileSiteKey: "", bookingLeadMinutes: 90 } }) });
+  await page.goto("/");
+  await page.locator("#booking-entry-button").click();
+  await expect(page.locator("#slot-lead-hint")).toHaveText("Book at least 90 min before pickup");
+  await page.locator("#calendar-grid .calendar-day").first().click();
+  await expect(page.locator('.slot-button[data-slot="19:00"]')).toBeDisabled();
+  await expect(page.locator('.slot-button[data-slot="19:00"]')).toContainText("Closed");
+  await expect(page.locator('.slot-button[data-slot="20:00"]')).toBeEnabled();
 });
 
 test("booking timeout restores same-booking retry without rotating its key or payload", async ({ page }) => {

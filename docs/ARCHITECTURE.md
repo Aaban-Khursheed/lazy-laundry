@@ -64,7 +64,7 @@ files in `tests/worker.test.js`.
 | Endpoint | Guards | Notes |
 |---|---|---|
 | `GET /api/health` | — | D1 `SELECT 1` liveness |
-| `GET /api/config` | — | `bookingEnabled`, `priceRevision`, `turnstileSiteKey` |
+| `GET /api/config` | — | `bookingEnabled`, `priceRevision`, `turnstileSiteKey`, `bookingLeadMinutes` |
 | `GET /api/availability?date=` | rate limit | booked slots; KL date, 7-day window |
 | `POST /api/estimate` | rate limit + Turnstile(`estimate`) | server-authoritative quote incl. outstanding penalty fees + promo preview |
 | `POST /api/bookings` | rate limit + Turnstile(`booking`) + `X-Idempotency-Key` + `PUBLIC_BOOKING_ENABLED` | transactional slot reservation, see below |
@@ -118,7 +118,7 @@ Migrations (`api/migrations/`) are additive and **not undone by rollback**.
 
 1. rate limit → Turnstile → idempotency-key format → payload validation.
 2. Idempotent replay (IETF Idempotency-Key draft semantics): the fingerprint is the SHA-256 of the canonical client-supplied fields only, never server-derived values such as `readyAt` or totals. Same key + same fingerprint → 201 with the stored booking and the re-issued token; same key + different fingerprint → 422 `idempotency_key_reused`.
-3. `PUBLIC_BOOKING_ENABLED` gate (503 when off) → slot window check.
+3. `PUBLIC_BOOKING_ENABLED` gate (503 when off) → slot window check: KL date within 7 days and pickup at least `BOOKING_LEAD_MINUTES` (default 60) away; the operator may use any slot that has not started.
 4. One `env.DB.batch`: customer upsert → penalty-balance zero guarded by
    `changes()=1` → booking `INSERT … WHERE` slot/promo/balance guards → promo
    redemption increment → penalty allocation → status + audit events.

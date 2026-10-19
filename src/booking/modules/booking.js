@@ -9,6 +9,7 @@ import {
   formatDate,
   formatMoney,
   formatSlot,
+  getBookingLeadMinutes,
   getMaxBookingDateString,
   getTodayString,
   getSlotsForDate,
@@ -279,13 +280,14 @@ export function renderSlots(alignToAvailable = false) {
     const booked = isDateSlotBooked(dateString, slot);
     const inCurrentSchedule = isSlotInCurrentSchedule(dateString, slot);
     const expired = inCurrentSchedule && isSlotClosed(dateString, slot);
-    const state = booked ? "Booked" : !inCurrentSchedule ? "Coming soon" : expired ? "Expired" : "Open";
+    const state = booked ? "Booked" : !inCurrentSchedule ? "Coming soon" : expired ? "Closed" : "Open";
+    const stateClass = expired ? "expired" : state.toLowerCase().replaceAll(" ", "-");
     button.type = "button";
-    button.className = `slot-button ${state.toLowerCase().replaceAll(" ", "-")}`;
+    button.className = `slot-button ${stateClass}`;
     button.innerHTML = `<strong>${formatSlot(slot)}</strong><small>${state}</small>`;
     button.dataset.slot = slot;
     button.disabled = booked || !inCurrentSchedule || expired;
-    button.title = booked ? "Already booked" : !inCurrentSchedule ? "Coming soon" : expired ? "Slot expired" : "Open for booking";
+    button.title = booked ? "Already booked" : !inCurrentSchedule ? "Coming soon" : expired ? `Booking closes ${getBookingLeadMinutes()} min before pickup` : "Open for booking";
     button.setAttribute("aria-label", `${formatSlot(slot)}, ${state.toLowerCase()}`);
     button.setAttribute("aria-pressed", String(slot === selectedSlot && !button.disabled));
 

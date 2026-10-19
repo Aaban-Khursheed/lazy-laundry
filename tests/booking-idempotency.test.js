@@ -101,6 +101,15 @@ describe("booking idempotency", () => {
     expect(retryBody.trackingToken).toBe(firstBody.trackingToken);
   });
 
+  it("a booking inside the lead time is rejected with slot_unavailable", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const db = fakeDB();
+    vi.setSystemTime(new Date("2026-10-20T18:30:00+08:00"));
+    const response = await post(db, "2026-10-20", "19:00");
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "The pickup slot is no longer available", code: "slot_unavailable" });
+  });
+
   it("an overlapping identical retry that loses the race receives the winner's booking", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const db = fakeDB();

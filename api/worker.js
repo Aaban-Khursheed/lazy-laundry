@@ -259,7 +259,15 @@ function isScheduledSlot(dateString, slot) {
   return evening.includes(slot) || ((weekday === 0 || weekday === 6) && weekendMorning.includes(slot));
 }
 
-function isPickupSlotAvailable(dateString, slot) {
+const DEFAULT_BOOKING_LEAD_MINUTES = 60;
+
+function bookingLeadMinutes(env) {
+  const raw = String(env?.BOOKING_LEAD_MINUTES ?? "").trim();
+  const value = /^\d{1,4}$/.test(raw) ? Number(raw) : Number.NaN;
+  return value <= 1440 ? value : DEFAULT_BOOKING_LEAD_MINUTES;
+}
+
+function isPickupSlotAvailable(dateString, slot, leadMinutes = DEFAULT_BOOKING_LEAD_MINUTES) {
   if (!isValidDate(dateString) || !isScheduledSlot(dateString, slot)) {
     return false;
   }
@@ -267,8 +275,7 @@ function isPickupSlotAvailable(dateString, slot) {
   if (dateString < today || dateString > addLocalDays(today, 6)) {
     return false;
   }
-  const pickupAt = Date.parse(`${dateString}T${slot}:00+08:00`);
-  return dateString !== today || Date.now() < pickupAt + 45 * 60 * 1000;
+  return Date.now() < Date.parse(`${dateString}T${slot}:00+08:00`) - leadMinutes * 60 * 1000;
 }
 
 function readyAtFor(dateString, slot, service, now = Date.now()) {
@@ -554,7 +561,7 @@ async function createBooking(request, env, cors) {
   if (env.PUBLIC_BOOKING_ENABLED !== "true") {
     return jsonResponse({ error: "Booking intake is not enabled" }, 503, cors);
   }
-  if (!isPickupSlotAvailable(booking.pickupDate, booking.pickupSlot)) {
+  if (!isPickupSlotAvailable(booking.pickupDate, booking.pickupSlot, bookingLeadMinutes(env))) {
     return jsonResponse({ error: "The pickup slot is no longer available", code: "slot_unavailable" }, 409, cors);
   }
   const customerId = customerIdForPhone(booking.phone);
@@ -670,6 +677,7 @@ async function getPublicConfig(env, cors) {
   return jsonResponse({
     bookingEnabled: env.PUBLIC_BOOKING_ENABLED === "true",
     priceRevision: env.PRICE_REVISION || "launch-v1",
+    bookingLeadMinutes: bookingLeadMinutes(env),
     turnstileSiteKey: typeof env.TURNSTILE_SITEKEY === "string" && env.TURNSTILE_SITEKEY ? env.TURNSTILE_SITEKEY : null,
   }, 200, cors);
 }
@@ -884,7 +892,7 @@ async function rescheduleCustomerBooking(request, env, cors) {
   if (customerCancellationIsLate(current)) return jsonResponse({ error: "Rescheduling is closed for this pickup" }, 409, cors);
   const pickupDate = typeof input?.pickupDate === "string" ? input.pickupDate : "";
   const pickupSlot = typeof input?.pickupSlot === "string" ? input.pickupSlot : "";
-  if (!isPickupSlotAvailable(pickupDate, pickupSlot)) return jsonResponse({ error: "The new pickup slot is unavailable", code: "slot_unavailable" }, 409, cors);
+  if (!isPickupSlotAvailable(pickupDate, pickupSlot, bookingLeadMinutes(env))) return jsonResponse({ error: "The new pickup slot is unavailable", code: "slot_unavailable" }, 409, cors);
   const now = new Date().toISOString();
   const auditId = crypto.randomUUID();
   try {
@@ -1450,7 +1458,7 @@ async function updateOperatorBooking(request, env, id, actor, cors) {
     }
     const pickupDate = typeof input.pickupDate === "string" && input.pickupDate ? input.pickupDate : current.pickup_date;
     const pickupSlot = typeof input.pickupSlot === "string" && input.pickupSlot ? input.pickupSlot : current.pickup_slot;
-    if (!isPickupSlotAvailable(pickupDate, pickupSlot)) {
+    if (!isPickupSlotAvailable(pickupDate, pickupSlot, 0)) {
       return jsonResponse({ error: "The pickup slot is no longer available" }, 409, cors);
     }
     statements = [
@@ -1500,7 +1508,7 @@ async function updateOperatorBooking(request, env, id, actor, cors) {
       || (slotChanged && (!isValidDate(merged.pickupDate) || !isScheduledSlot(merged.pickupDate, merged.pickupSlot)))) {
       return jsonResponse({ error: "Invalid edit fields" }, 400, cors);
     }
-    if (slotChanged && !isPickupSlotAvailable(merged.pickupDate, merged.pickupSlot)) {
+    if (slotChanged && !isPickupSlotAvailable(merged.pickupDate, merged.pickupSlot, 0)) {
       return jsonResponse({ error: "The pickup slot is no longer available" }, 409, cors);
     }
     const serviceChanged = merged.packageSize !== current.package_size || merged.service !== current.service || merged.hangers !== Boolean(current.hangers);
@@ -1963,7 +1971,7 @@ async function requireOperator(request, env, cors) {
   return { email: auth.email };
 }
 
-export { bookingFingerprint, canonicalize, csvCell, customerCancellationIsLate, isPickupSlotAvailable, isScheduledSlot, isValidDate, makeTrackingToken, normalizePromoCode, priceInCents, promoDiscountCents, promoEligibility, promoStoredValue };
+export { bookingFingerprint, bookingLeadMinutes, canonicalize, csvCell, customerCancellationIsLate, isPickupSlotAvailable, isScheduledSlot, isValidDate, makeTrackingToken, normalizePromoCode, priceInCents, promoDiscountCents, promoEligibility, promoStoredValue };
 
 export default {
   async fetch(request, env) {

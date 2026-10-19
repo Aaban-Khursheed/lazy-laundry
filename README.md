@@ -27,9 +27,11 @@ failure-mode contract, decision records: **`docs/ARCHITECTURE.md`**.
 ## Configuration inventory
 
 **Vars** (in `wrangler.jsonc`, safe to commit):
-`ENVIRONMENT`, `PUBLIC_BOOKING_ENABLED`, `PRICE_REVISION`, `TURNSTILE_SITEKEY`,
+`ENVIRONMENT`, `PUBLIC_BOOKING_ENABLED`, `PRICE_REVISION`, `BOOKING_LEAD_MINUTES`, `TURNSTILE_SITEKEY`,
 `CUSTOMER_HOSTS`, `TURNSTILE_HOSTNAMES`, `OPERATOR_HOST`,
 `OPERATOR_ALLOWED_EMAILS`, `SERVICE_TIMEZONE`.
+
+`BOOKING_LEAD_MINUTES` (default 60) is the minimum notice before pickup for customer bookings and reschedules; the operator may schedule any slot that has not started.
 
 **Optional vars:** `TERMS_POLICY_VERSION` (defaults to `launch-v1`) — bump it
 with each legal-page revision so `terms_accepted_at`/`terms_policy_version`

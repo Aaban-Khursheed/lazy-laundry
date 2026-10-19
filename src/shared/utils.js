@@ -63,9 +63,20 @@ export function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+let bookingLeadMinutes = 60;
+
+export function setBookingLeadMinutes(minutes) {
+  if (!Number.isInteger(minutes) || minutes < 0 || minutes > 1440 || minutes === bookingLeadMinutes) return false;
+  bookingLeadMinutes = minutes;
+  return true;
+}
+
+export function getBookingLeadMinutes() {
+  return bookingLeadMinutes;
+}
+
 export function isSlotClosed(dateString, slot) {
-  if (dateString !== getTodayString()) return false;
-  return Date.now() >= Date.parse(`${dateString}T${slot}:00+08:00`) + 45 * 60 * 1000;
+  return Date.now() >= Date.parse(`${dateString}T${slot}:00+08:00`) - bookingLeadMinutes * 60 * 1000;
 }
 
 export function showError(element, message) {
