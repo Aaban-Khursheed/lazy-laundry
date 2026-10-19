@@ -38,7 +38,7 @@ function securityHeaders({ api = false, operator = false } = {}) {
     "Content-Security-Policy": "default-src 'self'; script-src 'self' https://challenges.cloudflare.com; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; form-action 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'",
     "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
     "Referrer-Policy": operator ? "no-referrer" : "strict-origin-when-cross-origin",
-    "Strict-Transport-Security": "max-age=300",
+    "Strict-Transport-Security": "max-age=15552000; includeSubDomains",
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
     ...(api ? { "Cache-Control": "no-store" } : {}),
@@ -106,7 +106,7 @@ async function serveAsset(request, env, role) {
     return jsonResponse({ error: "Not found" }, 404);
   }
   const prefixes = role === "operator" ? OPERATOR_ASSET_PREFIXES : CUSTOMER_ASSET_PREFIXES;
-  if (!prefixes.some((prefix) => pathname === prefix || pathname.startsWith(prefix)) || pathname === "/booking/modules/operator.js" && role === "customer") {
+  if (!prefixes.some((prefix) => pathname === prefix || pathname.startsWith(prefix))) {
     return jsonResponse({ error: "Not found" }, 404);
   }
   const assetUrl = new URL(incoming);
@@ -1059,6 +1059,33 @@ function decodeJwtPart(value) {
   return JSON.parse(new TextDecoder().decode(decodeBase64Url(value)));
 }
 
+const ACCESS_JWKS_TTL_MS = 10 * 60 * 1000;
+const ACCESS_JWKS_REFETCH_MS = 30 * 1000;
+let accessJwksCache = { issuer: "", keys: new Map(), fetchedAt: 0, expiresAt: 0 };
+
+async function getAccessKeys(issuer, kid) {
+  const now = Date.now();
+  const fresh = accessJwksCache.issuer === issuer && accessJwksCache.expiresAt > now;
+  const missNeedsRefetch = !accessJwksCache.keys.has(kid) && now - accessJwksCache.fetchedAt > ACCESS_JWKS_REFETCH_MS;
+  if (fresh && !missNeedsRefetch) return accessJwksCache.keys;
+  const response = await fetch(new URL("/cdn-cgi/access/certs", issuer), { signal: AbortSignal.timeout(5000) });
+  if (!response.ok) return null;
+  const certs = await response.json();
+  const keys = new Map();
+  for (const jwk of certs?.keys || []) {
+    if (jwk?.kty !== "RSA" || typeof jwk.kid !== "string") continue;
+    keys.set(jwk.kid, await crypto.subtle.importKey(
+      "jwk",
+      jwk,
+      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+      false,
+      ["verify"],
+    ));
+  }
+  accessJwksCache = { issuer, keys, fetchedAt: now, expiresAt: now + ACCESS_JWKS_TTL_MS };
+  return keys;
+}
+
 async function verifyOperator(request, env) {
   const hostname = new URL(request.url).hostname.toLowerCase();
   if (env.ENVIRONMENT === "local" && ["localhost", "127.0.0.1", "ops.localhost"].includes(hostname) && env.LOCAL_OPERATOR_EMAIL && request.headers.get("X-Local-Operator-Email") === env.LOCAL_OPERATOR_EMAIL) {
@@ -1087,18 +1114,10 @@ async function verifyOperator(request, env) {
   }
   const issuer = teamDomain.origin;
   try {
-    const response = await fetch(new URL("/cdn-cgi/access/certs", issuer), { signal: AbortSignal.timeout(5000) });
-    if (!response.ok) return { kind: "unavailable" };
-    const certs = await response.json();
-    const jwk = certs.keys?.find((key) => key.kid === header.kid && key.kty === "RSA");
-    if (!jwk) return { kind: "invalid" };
-    const key = await crypto.subtle.importKey(
-      "jwk",
-      jwk,
-      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
-      false,
-      ["verify"],
-    );
+    const keys = await getAccessKeys(issuer, header.kid);
+    if (!keys) return { kind: "unavailable" };
+    const key = keys.get(header.kid);
+    if (!key) return { kind: "invalid" };
     const validSignature = await crypto.subtle.verify(
       "RSASSA-PKCS1-v1_5",
       key,

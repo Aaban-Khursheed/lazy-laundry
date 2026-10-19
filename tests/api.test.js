@@ -6,7 +6,7 @@ beforeEach(async () => {
   vi.resetModules();
   vi.stubGlobal("document", { querySelector: () => null });
   vi.stubGlobal("window", { location: { origin: "http://localhost:8787", hostname: "localhost" } });
-  ({ apiRequest } = await import("../public/shared/api.js"));
+  ({ apiRequest } = await import("../src/shared/api.js"));
 });
 
 afterEach(() => {

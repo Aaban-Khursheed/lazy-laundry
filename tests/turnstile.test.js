@@ -92,7 +92,7 @@ beforeEach(async () => {
   vi.stubGlobal("fetch", fetchMock);
   vi.stubGlobal("window", {});
   vi.stubGlobal("document", { head, body, createElement: vi.fn(element) });
-  ({ getTurnstileToken } = await import("../public/booking/modules/turnstile.js"));
+  ({ getTurnstileToken } = await import("../src/booking/modules/turnstile.js"));
 });
 
 afterEach(() => {

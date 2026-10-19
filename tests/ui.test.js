@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyVariants, badgeVariants, buttonVariants, surfaceVariants } from "../ui/variants.js";
+import { applyVariants, badgeVariants, buttonVariants, surfaceVariants } from "../src/shared/variants.js";
 
 function variantElement(dataset, className = "") {
   return {

@@ -1,6 +1,6 @@
 export default [
   {
-    ignores: ["node_modules/**", "archive/**", "coverage/**", "playwright-report/**", "test-results/**", "public/shared/variants.js"],
+    ignores: ["node_modules/**", "coverage/**", "playwright-report/**", "test-results/**", "public/shared/variants.js", "public/booking/app.js", "public/operator/app.js"],
     files: ["**/*.js"],
     languageOptions: {
       ecmaVersion: "latest",
