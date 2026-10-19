@@ -99,6 +99,9 @@ async function serveAsset(request, env, role) {
   if (role === "customer" && (pathname === "/" || pathname === "/index.html" || pathname === "/track" || pathname === "/track/")) {
     pathname = "/booking/index.html";
   }
+  if (role === "customer" && /^\/legal\/[a-z0-9-]+\/?$/i.test(pathname)) {
+    pathname = `${pathname.replace(/\/+$/, "")}/index.html`;
+  }
   if (role === "operator" && (pathname === "/" || pathname === "/index.html")) {
     pathname = "/operator/index.html";
   }
