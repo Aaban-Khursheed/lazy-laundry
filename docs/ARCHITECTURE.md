@@ -96,7 +96,8 @@ files in `tests/worker.test.js`.
   `service_total_cents`/`fee_total_cents`/`discount_cents`/`total_cents`
   (integer sen), `payment_method`/`payment_status`, `status`, cancellation
   reason/actor/at, `ready_at`, `revision` (optimistic concurrency), terms
-  acceptance + policy version, `promo_code`.
+  acceptance + policy version, `promo_code`, `operator_reminded_at`
+  (pre-pickup reminder digest dedupe).
   - **Key constraint:** `bookings_one_active_per_pickup_slot` — partial
     unique index on `(pickup_date, pickup_slot) WHERE status <> 'cancelled'`.
     Double-booking is impossible below the application layer.
@@ -137,6 +138,23 @@ Error codes: `quote_changed` (409, includes fee-balance changes), `slot_taken` (
   idempotent replay can re-issue the original token.
 - `revoke`/`rotate` change the stored hash+ ciphertext; old tokens die.
 - Tokens never appear in logs, API URLs, storage, or cacheable responses.
+
+## Operator alerts
+
+- `send_email` binding `EMAIL` pinned by `destination_address` to the single
+  operator inbox — the Worker can never send elsewhere.
+  `OPERATOR_ALERT_EMAIL` mirrors that address for `send()`'s `to` field.
+- Instant alerts (`booking_created`, `customer_cancelled`,
+  `customer_rescheduled`, `customer_booking_edited`) send inside
+  `ctx.waitUntil` after the write commits; idempotent replay does not
+  re-alert. Transient `E_*` codes retry once; final failure logs
+  `operator_alert_failed` (no PII) and never affects the response.
+- Cron `*/15 * * * *` → `scheduled()` → digest of `confirmed` bookings with
+  pickup starting within 90 min and `created_at` older than 30 min; rows are
+  stamped `operator_reminded_at` only after a successful send, so each
+  booking reminds once and a failed send retries next tick. `LIMIT 50`.
+- Emails carry the fields the operator needs (address, phone, `wa.me`,
+  service, total); tracking tokens are never included.
 
 ## Operator authentication
 

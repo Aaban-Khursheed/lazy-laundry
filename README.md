@@ -29,7 +29,7 @@ failure-mode contract, decision records: **`docs/ARCHITECTURE.md`**.
 **Vars** (in `wrangler.jsonc`, safe to commit):
 `ENVIRONMENT`, `PUBLIC_BOOKING_ENABLED`, `PRICE_REVISION`, `BOOKING_LEAD_MINUTES`, `TURNSTILE_SITEKEY`,
 `CUSTOMER_HOSTS`, `TURNSTILE_HOSTNAMES`, `OPERATOR_HOST`,
-`OPERATOR_ALLOWED_EMAILS`, `SERVICE_TIMEZONE`.
+`OPERATOR_ALLOWED_EMAILS`, `OPERATOR_ALERT_EMAIL`, `SERVICE_TIMEZONE`.
 
 `BOOKING_LEAD_MINUTES` (default 60) is the minimum notice before pickup for customer bookings and reschedules; the operator may schedule any slot that has not started.
 
@@ -61,6 +61,35 @@ fail-closed by design. `OPERATOR_ALLOWED_EMAILS` is a var, not a secret.
    and checks the email allowlist — defense in depth, not redundant.
 5. Local dev bypass: `ENVIRONMENT=local` + `X-Local-Operator-Email` header
    matching `LOCAL_OPERATOR_EMAIL`. Never accepted in production.
+
+## Operator alerts
+
+The Worker emails the operator on every customer-side change — booking
+created, cancelled, rescheduled, edited — via the `send_email` binding
+(`EMAIL`). The binding is pinned with `destination_address` to the operator
+inbox, so the Worker can only ever send to that one address.
+`OPERATOR_ALERT_EMAIL` supplies the recipient for `send()`; keep it equal to
+the binding's `destination_address`.
+
+- **Instant alerts** are sent inside `ctx.waitUntil` after the booking write
+  commits — never on idempotent replay. A failed send logs
+  `operator_alert_failed` (booking number + error code, no PII) and never
+  changes the customer response. Transient codes retry once after ~0.7s.
+- **Pickup reminders**: a `*/15 * * * *` cron emails a digest of `confirmed`
+  bookings starting within 90 minutes (and at least 30 minutes old, so a
+  last-minute booking doesn't double-notify). `operator_reminded_at` marks
+  each booking so it appears in exactly one digest — the safety net for
+  bookings made many hours before pickup.
+- Alert emails include the address, phone, and `wa.me` link the operator
+  needs to act. They never include tracking tokens.
+- **Setup (owner):** onboard `lazylaundry.me` to Email Sending in the
+  Cloudflare dashboard (adds SPF/DKIM automatically). Until then sends fail
+  with a logged `E_SENDER_*` code and bookings are unaffected. If sends fail
+  with `E_RECIPIENT_NOT_ALLOWED`, add/verify the destination address under
+  Email Routing → Destination addresses.
+- Local dev simulates the binding: sends are logged by Wrangler and written
+  under `.wrangler/tmp/email/`; nothing is delivered. Trigger the reminder
+  cron locally with `curl http://localhost:8787/cdn-cgi/local/scheduled`.
 
 ## Database
 
@@ -95,7 +124,8 @@ Structured `console.error` events worth alerting on / grepping in Logs:
 `booking_create_failed`, `promo_redemption_guard_mismatch`,
 `d1_health_check_failed`, `tracking_token_replay_unavailable`,
 `availability_lookup_failed`, `estimate_failed`, `tracking_lookup_failed`,
-`customer_booking_mutation_failed`, `operator_request_failed`.
+`customer_booking_mutation_failed`, `operator_request_failed`,
+`operator_alert_failed`, `pickup_reminder_failed`.
 
 ## Standing decisions
 

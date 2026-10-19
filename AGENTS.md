@@ -39,6 +39,7 @@ The local Worker listens on `http://localhost:8787`. Local operator smoke tests 
 - Use parameterized SQL, integer sen values, guarded batch writes, revision checks, and the unique active pickup-slot constraint.
 - Customer tracking responses must not expose name, phone, block, unit, notes, penalties, or operator identity.
 - Tracking credentials are bearer secrets: keep them in URL fragments only, never in API URLs, logs, storage, exports, or cacheable responses.
+- Operator alert emails go only to the binding's pinned `destination_address`; they may carry customer PII the operator needs but must never include tracking tokens. Alert delivery is best-effort (`ctx.waitUntil`, one transient retry): it must never block, delay, or fail a customer request, and failures log `operator_alert_failed` without PII.
 - Public mutations require same-origin JSON requests and server-side Turnstile verification in production. Configure the `RATE_LIMITER` binding before public intake; rate limiting is an abuse control, not authoritative accounting.
 - Operator access requires Cloudflare Access plus Worker-side JWT verification in production.
 - Intake is open while the legal pages are finalized. Publishing the approved bilingual (BM/EN) Terms and Privacy Notice and bumping `TERMS_POLICY_VERSION` is the next legal gate.

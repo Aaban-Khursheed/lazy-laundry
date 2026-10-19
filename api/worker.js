@@ -297,6 +297,141 @@ function formatReadyTime(value) {
   }).format(new Date(value));
 }
 
+const EMAIL_TRANSIENT_CODES = new Set([
+  "E_RATE_LIMIT_EXCEEDED",
+  "E_DAILY_LIMIT_EXCEEDED",
+  "E_INTERNAL_SERVER_ERROR",
+  "E_DELIVERY_FAILED",
+]);
+
+function escapeHtmlText(value) {
+  return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function senToRinggit(cents) {
+  return `RM${(Number(cents || 0) / 100).toFixed(2)}`;
+}
+
+function pickupDisplay(dateString, slot) {
+  return formatReadyTime(pickupStartAt(dateString, slot));
+}
+
+function bookingAlertLines(env, row) {
+  const extras = [row.hangers ? "hangers" : null, row.folding ? "folding" : null, row.ironing ? "ironing" : null].filter(Boolean);
+  const phoneDigits = String(row.phone || "").replace(/\D/g, "");
+  return [
+    `Pickup: ${pickupDisplay(row.pickup_date, row.pickup_slot)}`,
+    `Address: ${row.block}, Unit ${row.unit}, Edumetro, USJ 1`,
+    `Customer: ${row.customer_name} — ${row.phone}`,
+    `WhatsApp: https://wa.me/${phoneDigits}`,
+    `Service: ${row.package_size}-piece ${SERVICE_LABELS[row.service] || row.service}${extras.length ? ` + ${extras.join(", ")}` : ""}`,
+    `Total: ${senToRinggit(row.total_cents)} (${PAYMENT_LABELS[row.payment_method] || row.payment_method}, ${row.payment_status})`,
+    `Dashboard: https://${env.OPERATOR_HOST || "ops.lazylaundry.me"}/`,
+  ];
+}
+
+function buildOperatorAlert(env, kind, row, extra = {}) {
+  const pickup = pickupDisplay(row.pickup_date, row.pickup_slot);
+  const base = bookingAlertLines(env, row);
+  if (kind === "booking_created") {
+    return { subject: `New booking ${row.booking_number} — ${pickup}`, lines: [`Booking: ${row.booking_number}`, ...base] };
+  }
+  if (kind === "customer_cancelled") {
+    return {
+      subject: `Cancelled ${row.booking_number} — was ${pickup}`,
+      lines: [
+        `Booking: ${row.booking_number}`,
+        extra.late ? `Late cancellation: ${senToRinggit(extra.penaltyCents)} fee added` : "Cancelled inside the free window",
+        ...(extra.releasedFeeCents ? [`Returned outstanding fee: ${senToRinggit(extra.releasedFeeCents)}`] : []),
+        ...base,
+      ],
+    };
+  }
+  if (kind === "customer_rescheduled") {
+    return {
+      subject: `Rescheduled ${row.booking_number} → ${pickup}`,
+      lines: [`Booking: ${row.booking_number}`, `Was: ${pickupDisplay(extra.fromDate, extra.fromSlot)}`, ...base],
+    };
+  }
+  const changedFields = Array.isArray(extra.changedFields) && extra.changedFields.length ? extra.changedFields.join(", ") : "details";
+  return {
+    subject: `Edited ${row.booking_number} (${changedFields})`,
+    lines: [`Booking: ${row.booking_number}`, `Changed: ${changedFields}`, ...base],
+  };
+}
+
+function buildPickupReminderAlert(env, rows) {
+  return {
+    subject: `${rows.length} pickup${rows.length === 1 ? "" : "s"} due within 90 minutes`,
+    lines: [
+      "Bookings still Confirmed with pickup starting soon:",
+      ...rows.flatMap((row) => ["", `— ${row.booking_number} · ${pickupDisplay(row.pickup_date, row.pickup_slot)}`, ...bookingAlertLines(env, row)]),
+    ],
+  };
+}
+
+async function sendOperatorEmail(env, { kind, subject, lines, bookingNumber = null }) {
+  if (!env?.EMAIL?.send) return false;
+  const html = `<ul>${lines.map((line) => `<li>${escapeHtmlText(line)}</li>`).join("")}</ul>`;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await env.EMAIL.send({
+        from: { email: "alerts@lazylaundry.me", name: "Lazy Laundry" },
+        to: env.OPERATOR_ALERT_EMAIL ?? null,
+        subject,
+        text: lines.join("\n"),
+        html,
+      });
+      return true;
+    } catch (error) {
+      const code = error instanceof Error ? error.code || "unknown" : "unknown";
+      if (attempt === 0 && EMAIL_TRANSIENT_CODES.has(code)) {
+        await new Promise((resolve) => setTimeout(resolve, 700));
+        continue;
+      }
+      console.error(JSON.stringify({ event: "operator_alert_failed", kind, bookingNumber, code }));
+      return false;
+    }
+  }
+  return false;
+}
+
+function queueOperatorAlert(ctx, env, kind, row, extra = {}) {
+  try {
+    if (!env?.EMAIL?.send || !ctx?.waitUntil || !row) return;
+    const { subject, lines } = buildOperatorAlert(env, kind, row, extra);
+    ctx.waitUntil(sendOperatorEmail(env, { kind, subject, lines, bookingNumber: row.booking_number }));
+  } catch {
+    console.error(JSON.stringify({ event: "operator_alert_failed", kind, bookingNumber: row?.booking_number || null, code: "build_error" }));
+  }
+}
+
+const PICKUP_REMINDER_WINDOW_MS = 90 * 60 * 1000;
+const PICKUP_REMINDER_MIN_AGE_MS = 30 * 60 * 1000;
+
+async function runPickupReminders(env) {
+  if (!env?.EMAIL?.send || !env?.DB?.prepare) return;
+  const now = Date.now();
+  const result = await env.DB.prepare(`
+    SELECT * FROM bookings
+    WHERE status = 'confirmed' AND operator_reminded_at IS NULL AND created_at <= ?
+      AND datetime(pickup_date || 'T' || pickup_slot || ':00+08:00') <= datetime(?)
+    ORDER BY pickup_date, pickup_slot
+    LIMIT 50
+  `).bind(
+    new Date(now - PICKUP_REMINDER_MIN_AGE_MS).toISOString(),
+    new Date(now + PICKUP_REMINDER_WINDOW_MS).toISOString(),
+  ).all();
+  const rows = result?.results || [];
+  if (!rows.length) return;
+  const { subject, lines } = buildPickupReminderAlert(env, rows);
+  if (!await sendOperatorEmail(env, { kind: "pickup_reminder", subject, lines })) return;
+  const stamp = new Date(now).toISOString();
+  await env.DB.batch(rows.map((row) => env.DB.prepare(
+    "UPDATE bookings SET operator_reminded_at = ? WHERE id = ? AND operator_reminded_at IS NULL",
+  ).bind(stamp, row.id)));
+}
+
 function priceInCents(packageSize, service, hangers) {
   const base = packageSize === 10 ? 2999 : 5499;
   const express = packageSize === 10 ? 1000 : 1500;
@@ -539,7 +674,7 @@ async function replayIdempotentBooking(env, keyHash, payloadHash, cors) {
   return jsonResponse({ booking: bookingForClient(row), trackingToken }, 201, cors);
 }
 
-async function createBooking(request, env, cors) {
+async function createBooking(request, env, cors, ctx) {
   const limit = await enforceRateLimit(request, env, "booking");
   if (!limit.ok) return rateLimitFailure(limit, cors);
   if (!await verifyTurnstile(request, env, "booking")) {
@@ -658,6 +793,7 @@ async function createBooking(request, env, cors) {
       console.error(JSON.stringify({ event: "promo_redemption_guard_mismatch", bookingId: id, code: appliedPromo.code }));
     }
     const row = await env.DB.prepare("SELECT * FROM bookings WHERE id = ?").bind(id).first();
+    queueOperatorAlert(ctx, env, "booking_created", row);
     return jsonResponse({ booking: bookingForClient(row), trackingToken }, 201, cors);
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
@@ -804,7 +940,7 @@ function customerCancellationIsLate(row) {
   return Date.now() >= pickupStartAt(row.pickup_date, row.pickup_slot) - 10 * 60 * 1000;
 }
 
-async function cancelCustomerBooking(request, env, cors) {
+async function cancelCustomerBooking(request, env, cors, ctx) {
   const limit = await enforceRateLimit(request, env, "cancel");
   if (!limit.ok) return rateLimitFailure(limit, cors);
   if (!await verifyTurnstile(request, env, "cancel")) {
@@ -867,6 +1003,7 @@ async function cancelCustomerBooking(request, env, cors) {
       return jsonResponse({ error: "Booking changed; refresh and try again" }, 409, cors);
     }
     const row = await env.DB.prepare("SELECT * FROM bookings WHERE id = ?").bind(current.id).first();
+    queueOperatorAlert(ctx, env, "customer_cancelled", row, { late, penaltyCents: penaltyAmount, releasedFeeCents: releaseAmount });
     return jsonResponse({ booking: bookingForClient(row) }, 200, cors);
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
@@ -878,7 +1015,7 @@ async function cancelCustomerBooking(request, env, cors) {
   }
 }
 
-async function rescheduleCustomerBooking(request, env, cors) {
+async function rescheduleCustomerBooking(request, env, cors, ctx) {
   const limit = await enforceRateLimit(request, env, "reschedule");
   if (!limit.ok) return rateLimitFailure(limit, cors);
   if (!await verifyTurnstile(request, env, "reschedule")) {
@@ -908,6 +1045,7 @@ async function rescheduleCustomerBooking(request, env, cors) {
     ]);
     if (results[0]?.meta?.changes !== 1) return jsonResponse({ error: "Booking changed; refresh and try again" }, 409, cors);
     const row = await env.DB.prepare("SELECT * FROM bookings WHERE id = ?").bind(current.id).first();
+    queueOperatorAlert(ctx, env, "customer_rescheduled", row, { fromDate: current.pickup_date, fromSlot: current.pickup_slot });
     return jsonResponse({ booking: bookingForClient(row) }, 200, cors);
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
@@ -946,7 +1084,7 @@ function customerEditView(row, late) {
   };
 }
 
-async function editCustomerBooking(request, env, cors) {
+async function editCustomerBooking(request, env, cors, ctx) {
   const limit = await enforceRateLimit(request, env, "edit");
   if (!limit.ok) return rateLimitFailure(limit, cors);
   if (!await verifyTurnstile(request, env, "edit")) {
@@ -1041,6 +1179,7 @@ async function editCustomerBooking(request, env, cors) {
         p.active AS promo_active, p.starts_at AS promo_starts_at, p.ends_at AS promo_ends_at
       FROM bookings b LEFT JOIN promotions p ON p.code = b.promo_code WHERE b.id = ?
     `).bind(current.id).first();
+    queueOperatorAlert(ctx, env, "customer_booking_edited", row, { changedFields });
     return jsonResponse({ booking: customerEditView(row) }, 200, cors);
   } catch (error) {
     console.error(JSON.stringify({ event: "customer_edit_failed", errorType: error instanceof Error ? error.name : "unknown" }));
@@ -1974,7 +2113,7 @@ async function requireOperator(request, env, cors) {
 export { bookingFingerprint, bookingLeadMinutes, canonicalize, csvCell, customerCancellationIsLate, isPickupSlotAvailable, isScheduledSlot, isValidDate, makeTrackingToken, normalizePromoCode, priceInCents, promoDiscountCents, promoEligibility, promoStoredValue };
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const role = hostRole(request, env);
     if (!role) return jsonResponse({ error: "Not found" }, 404);
@@ -2034,7 +2173,7 @@ export default {
 
     if (request.method === "POST" && url.pathname === "/api/bookings") {
       try {
-        return await createBooking(request, env, cors || {});
+        return await createBooking(request, env, cors || {}, ctx);
       } catch {
         console.error(JSON.stringify({ event: "booking_create_failed", errorType: "unexpected" }));
         return jsonResponse({ error: "Booking could not be saved" }, 503, cors || {});
@@ -2055,10 +2194,10 @@ export default {
       try {
         const mutation = customerMutationMatch[2].toLowerCase();
         return mutation === "cancel"
-          ? await cancelCustomerBooking(request, env, cors || {})
+          ? await cancelCustomerBooking(request, env, cors || {}, ctx)
           : mutation === "reschedule"
-            ? await rescheduleCustomerBooking(request, env, cors || {})
-            : await editCustomerBooking(request, env, cors || {});
+            ? await rescheduleCustomerBooking(request, env, cors || {}, ctx)
+            : await editCustomerBooking(request, env, cors || {}, ctx);
       } catch {
         console.error(JSON.stringify({ event: "customer_booking_mutation_failed" }));
         return jsonResponse({ error: "Booking update could not be saved" }, 503, cors || {});
@@ -2113,5 +2252,10 @@ export default {
     }
 
     return jsonResponse({ error: "Not found" }, 404, cors || {});
+  },
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(runPickupReminders(env).catch((error) => {
+      console.error(JSON.stringify({ event: "pickup_reminder_failed", errorType: error instanceof Error ? error.name : "unknown" }));
+    }));
   },
 };
