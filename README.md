@@ -10,6 +10,9 @@ Host role is derived from the request hostname; any other host (including
 `*.workers.dev`) gets a 404. Asset prefixes are enforced per role — operator
 assets are never served on customer hosts.
 
+Full system internals — request pipeline, data model, security model,
+failure-mode contract, decision records: **`docs/ARCHITECTURE.md`**.
+
 ## Commands
 
 | Command | Purpose |
@@ -94,9 +97,13 @@ Structured `console.error` events worth alerting on / grepping in Logs:
 
 ## Standing decisions
 
-- **`PUBLIC_BOOKING_ENABLED` stays `"false"` in committed config.** Flipping it
-  is the final act of launch — after legal, Access, Turnstile, and D1 gates in
-  `AGENTS.md` pass — not a standing state.
+- **Public intake is open (owner decision, 2026-10-19).** `PUBLIC_BOOKING_ENABLED`
+  is committed as `"true"` so the repo matches production and a routine deploy
+  can never silently close bookings; `tests/config.test.js` enforces this.
+  It is the emergency stop: from a clean checkout of `main` run
+  `npx wrangler deploy --var PUBLIC_BOOKING_ENABLED:false --message "emergency stop"`,
+  then commit the flag change (and update the config test) so the next deploy
+  does not reopen intake.
 - **`/api/estimate` discloses outstanding penalty fees for a phone number**
   without identity proof. Accepted: the fee must be shown before the customer
   commits, the endpoint is Turnstile-gated and rate-limited, and phone numbers
