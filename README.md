@@ -146,6 +146,12 @@ Structured `console.error` events worth alerting on / grepping in Logs:
   tokens (idempotent replays can't re-show the private link; tracking by hash
   still works). To rotate cleanly: keep old key under its version for decrypt,
   mint new for encrypt — implement before it's needed.
+- **Express turnaround stays 6 hours, including overnight (owner decision,
+  2026-10-20).** A 21:00 express pickup shows a ~03:00 ready time on tracking.
+  The operator confirmed overnight processing is real; `readyAtFor` and its
+  test pin the contract (express 6h, standard 12h or 15h for evening
+  pickups). Change it only with an owner decision — the tracking page shows
+  this time as a commitment.
 - **`workers_dev` stays enabled** — `hostRole` 404s it, so it serves nothing;
   kept for preview/dry-run convenience.
 - **HSTS is `max-age=15552000; includeSubDomains`** — consider `preload` only

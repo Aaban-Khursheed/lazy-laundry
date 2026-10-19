@@ -156,3 +156,41 @@ describe("booking idempotency", () => {
     });
   });
 });
+
+describe("turnaround commitments", () => {
+  // Owner-confirmed overnight capability (README standing decisions): express
+  // stays 6h even when it lands the ready time at ~03:00.
+
+  it("a 21:00 express pickup promises a 6-hour overnight ready time", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const db = fakeDB();
+    vi.setSystemTime(new Date("2026-10-20T12:00:00+08:00"));
+    const response = await post(db, "2026-10-21", "21:00", KEY, { service: "express" });
+    const body = await response.json();
+
+    expect(response.status).toBe(201);
+    expect(body.booking.readyAt).toBe("2026-10-21T19:00:00.000Z");
+  });
+
+  it("a standard evening pickup promises 15 hours (next morning)", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const db = fakeDB();
+    vi.setSystemTime(new Date("2026-10-20T12:00:00+08:00"));
+    const response = await post(db, "2026-10-21", "19:00");
+    const body = await response.json();
+
+    expect(response.status).toBe(201);
+    expect(body.booking.readyAt).toBe("2026-10-22T02:00:00.000Z");
+  });
+
+  it("a standard weekend morning pickup promises 12 hours", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const db = fakeDB();
+    vi.setSystemTime(new Date("2026-10-20T12:00:00+08:00"));
+    const response = await post(db, "2026-10-24", "10:00");
+    const body = await response.json();
+
+    expect(response.status).toBe(201);
+    expect(body.booking.readyAt).toBe("2026-10-24T14:00:00.000Z");
+  });
+});
