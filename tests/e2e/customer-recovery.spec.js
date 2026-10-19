@@ -164,6 +164,33 @@ test("lost response retries exactly the original key and body even after quote a
   expect(await page.evaluate(() => ({ local: localStorage.length, session: sessionStorage.length }))).toEqual({ local: 0, session: 0 });
 });
 
+test("a retry rejected as idempotency_key_reused keeps the booking protected instead of offering a new slot", async ({ page }) => {
+  const calls = await fixtures(page, {
+    booking: (route, count) => count === 1
+      ? route.abort("failed")
+      : route.fulfill({ status: 422, json: { code: "idempotency_key_reused", error: "This retry key was already used for a different booking" } }),
+  });
+  await checkout(page);
+  const slot = await page.locator("#pickup-slot").inputValue();
+  await page.locator('#booking-form [type="submit"]').click();
+  await expect(page.locator("#form-error")).toContainText(/confirmation could not be verified/i);
+  await page.locator('#booking-form [type="submit"]').click();
+  await expect(page.locator("#form-error")).toContainText(/contact Lazy Laundry/i);
+  await expect(page.locator("#pickup-slot")).toHaveValue(slot);
+  await expect(page.locator("#booking-recovery-reset")).toBeVisible();
+  expect(calls.bookings).toHaveLength(2);
+  expect(calls.bookings[1]).toEqual(calls.bookings[0]);
+});
+
+test("a slot_taken conflict asks for another slot and keeps the customer's details", async ({ page }) => {
+  await fixtures(page, { booking: (route) => route.fulfill({ status: 409, json: { code: "slot_taken", error: "That pickup slot has just been taken" } }) });
+  await checkout(page);
+  await page.locator('#booking-form [type="submit"]').click();
+  await expect(page.locator("#form-error")).toContainText(/choose an available pickup slot/i);
+  await expect(page.locator("#pickup-slot")).toHaveValue("");
+  await expect(page.locator("#customer-name")).toHaveValue("Synthetic Customer");
+});
+
 test("config failure blocks intake but not tracking and has an explicit working retry", async ({ page }) => {
   let available = false;
   await fixtures(page, { config: (route) => available ? route.fulfill({ json: { bookingEnabled: true, turnstileSiteKey: "" } }) : route.fulfill({ status: 503, json: { error: "Config unavailable" } }) });

@@ -540,8 +540,12 @@ async function submitApiBooking(payload, signature, onBookingCreated) {
     onBookingCreated(result.booking, result.trackingToken);
     pendingBooking = null;
   } catch (error) {
-    if (pendingBooking && (!sent || error.outcomeUnknown || !error.status)) {
-      reportBookingError(`Your confirmation could not be verified; retry the same booking. It may already be saved. Your original details are protected until confirmation is recovered.${!sent ? ` ${error.message}` : ""}`);
+    if (pendingBooking && (!sent || error.outcomeUnknown || !error.status || error.code === "idempotency_key_reused")) {
+      if (error.code === "idempotency_key_reused") {
+        reportBookingError("We couldn't match this retry to your earlier attempt. It may already be saved — please contact Lazy Laundry on WhatsApp before booking again.");
+      } else {
+        reportBookingError(`Your confirmation could not be verified; retry the same booking. It may already be saved. Your original details are protected until confirmation is recovered.${!sent ? ` ${error.message}` : ""}`);
+      }
     } else {
       if (sent) pendingBooking = null;
       if (error.status === 409 && error.code === "quote_changed") {
@@ -553,7 +557,7 @@ async function submitApiBooking(payload, signature, onBookingCreated) {
           reportBookingError(`The quote changed, but the new quote could not be loaded. Retry before confirming. ${quoteError.message}`);
         }
       } else {
-        slotConflict ||= error.status === 409;
+        slotConflict ||= error.status === 409 && (error.code === "slot_taken" || error.code === "slot_unavailable");
         reportBookingError(error.status === 503 ? "Booking is currently unavailable. Please try again." : error.message || "The booking could not be confirmed. Please try again.");
       }
     }

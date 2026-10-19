@@ -427,6 +427,12 @@ function canonicalize(value) {
   return JSON.stringify(value);
 }
 
+const BOOKING_FINGERPRINT_FIELDS = ["name", "phone", "block", "unit", "packageSize", "service", "hangers", "pickupDate", "pickupSlot", "paymentMethod", "promoCode", "priceRevision", "expectedTotalCents"];
+
+function bookingFingerprint(booking) {
+  return canonicalize(Object.fromEntries(BOOKING_FINGERPRINT_FIELDS.map((field) => [field, booking[field]])));
+}
+
 function decodeBase64(value) {
   const normalized = value.replaceAll("-", "+").replaceAll("_", "/").padEnd(Math.ceil(value.length / 4) * 4, "=");
   return Uint8Array.from(atob(normalized), (character) => character.charCodeAt(0));
@@ -516,7 +522,7 @@ async function replayIdempotentBooking(env, keyHash, payloadHash, cors) {
   const row = await env.DB.prepare("SELECT * FROM bookings WHERE idempotency_key_hash = ?").bind(keyHash).first();
   if (!row) return null;
   if (row.request_payload_hash !== payloadHash) {
-    return jsonResponse({ error: "This retry key was already used for a different booking" }, 409, cors);
+    return jsonResponse({ error: "This retry key was already used for a different booking", code: "idempotency_key_reused" }, 422, cors);
   }
   const trackingToken = await decryptTrackingToken(row.encrypted_tracking_token, env, `${row.id}:${row.booking_number}`);
   if (!trackingToken) {
@@ -541,7 +547,7 @@ async function createBooking(request, env, cors) {
   if (!booking) {
     return jsonResponse({ error: "Booking details are invalid or the pickup slot is unavailable" }, 400, cors);
   }
-  const payloadHash = await sha256(canonicalize(booking));
+  const payloadHash = await sha256(bookingFingerprint(booking));
   const keyHash = await sha256(idempotencyKey);
   const replay = await replayIdempotentBooking(env, keyHash, payloadHash, cors);
   if (replay) return replay;
@@ -549,7 +555,7 @@ async function createBooking(request, env, cors) {
     return jsonResponse({ error: "Booking intake is not enabled" }, 503, cors);
   }
   if (!isPickupSlotAvailable(booking.pickupDate, booking.pickupSlot)) {
-    return jsonResponse({ error: "The pickup slot is no longer available" }, 409, cors);
+    return jsonResponse({ error: "The pickup slot is no longer available", code: "slot_unavailable" }, 409, cors);
   }
   const customerId = customerIdForPhone(booking.phone);
   const existingCustomer = await env.DB.prepare("SELECT penalty_balance_cents FROM customers WHERE id = ?").bind(customerId).first();
@@ -638,7 +644,7 @@ async function createBooking(request, env, cors) {
     const bookingResult = results[bookingResultIndex];
     if (bookingResult?.meta?.changes !== 1) {
       if (appliedPromo) return jsonResponse({ error: "That promo code is no longer available", code: "quote_changed" }, 409, cors);
-      if (feeTotalCents > 0) return jsonResponse({ error: "The fee balance changed; refresh checkout and try again" }, 409, cors);
+      if (feeTotalCents > 0) return jsonResponse({ error: "The fee balance changed; refresh checkout and try again", code: "quote_changed" }, 409, cors);
       throw new Error("Booking insert did not change a row");
     }
     if (appliedPromo && results[bookingResultIndex + 1]?.meta?.changes !== 1) {
@@ -648,12 +654,12 @@ async function createBooking(request, env, cors) {
     return jsonResponse({ booking: bookingForClient(row), trackingToken }, 201, cors);
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
-    if (message.includes("bookings.pickup_date, bookings.pickup_slot")) {
-      return jsonResponse({ error: "That pickup slot has just been taken" }, 409, cors);
-    }
-    if (message.includes("bookings.idempotency_key_hash")) {
+    if (message.includes("UNIQUE constraint failed")) {
       const retry = await replayIdempotentBooking(env, keyHash, payloadHash, cors);
       if (retry) return retry;
+    }
+    if (message.includes("bookings.pickup_date, bookings.pickup_slot")) {
+      return jsonResponse({ error: "That pickup slot has just been taken", code: "slot_taken" }, 409, cors);
     }
     console.error(JSON.stringify({ event: "booking_create_failed", errorType: error instanceof Error ? error.name : "unknown" }));
     return jsonResponse({ error: "Booking could not be saved" }, 503, cors);
@@ -878,7 +884,7 @@ async function rescheduleCustomerBooking(request, env, cors) {
   if (customerCancellationIsLate(current)) return jsonResponse({ error: "Rescheduling is closed for this pickup" }, 409, cors);
   const pickupDate = typeof input?.pickupDate === "string" ? input.pickupDate : "";
   const pickupSlot = typeof input?.pickupSlot === "string" ? input.pickupSlot : "";
-  if (!isPickupSlotAvailable(pickupDate, pickupSlot)) return jsonResponse({ error: "The new pickup slot is unavailable" }, 409, cors);
+  if (!isPickupSlotAvailable(pickupDate, pickupSlot)) return jsonResponse({ error: "The new pickup slot is unavailable", code: "slot_unavailable" }, 409, cors);
   const now = new Date().toISOString();
   const auditId = crypto.randomUUID();
   try {
@@ -897,7 +903,7 @@ async function rescheduleCustomerBooking(request, env, cors) {
     return jsonResponse({ booking: bookingForClient(row) }, 200, cors);
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
-    if (message.includes("bookings.pickup_date, bookings.pickup_slot")) return jsonResponse({ error: "That pickup slot has just been taken" }, 409, cors);
+    if (message.includes("bookings.pickup_date, bookings.pickup_slot")) return jsonResponse({ error: "That pickup slot has just been taken", code: "slot_taken" }, 409, cors);
     console.error(JSON.stringify({ event: "customer_reschedule_failed", errorType: error instanceof Error ? error.name : "unknown" }));
     return jsonResponse({ error: "Rescheduling could not be saved" }, 503, cors);
   }
@@ -1565,7 +1571,7 @@ async function updateOperatorBooking(request, env, id, actor, cors) {
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
     if (message.includes("bookings.pickup_date, bookings.pickup_slot")) {
-      return jsonResponse({ error: "That pickup slot has just been taken" }, 409, cors);
+      return jsonResponse({ error: "That pickup slot has just been taken", code: "slot_taken" }, 409, cors);
     }
     console.error(JSON.stringify({ event: "operator_update_failed", errorType: error instanceof Error ? error.name : "unknown" }));
     return jsonResponse({ error: "Update could not be saved" }, 503, cors);
@@ -1957,7 +1963,7 @@ async function requireOperator(request, env, cors) {
   return { email: auth.email };
 }
 
-export { canonicalize, csvCell, customerCancellationIsLate, isPickupSlotAvailable, isScheduledSlot, isValidDate, makeTrackingToken, normalizePromoCode, priceInCents, promoDiscountCents, promoEligibility, promoStoredValue };
+export { bookingFingerprint, canonicalize, csvCell, customerCancellationIsLate, isPickupSlotAvailable, isScheduledSlot, isValidDate, makeTrackingToken, normalizePromoCode, priceInCents, promoDiscountCents, promoEligibility, promoStoredValue };
 
 export default {
   async fetch(request, env) {

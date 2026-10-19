@@ -117,16 +117,15 @@ Migrations (`api/migrations/`) are additive and **not undone by rollback**.
 `createBooking` ordering (`api/worker.js`):
 
 1. rate limit → Turnstile → idempotency-key format → payload validation.
-2. Idempotent replay: same key + same payload → return stored booking *and*
-   re-issue decrypted token; same key + different payload → 409.
+2. Idempotent replay (IETF Idempotency-Key draft semantics): the fingerprint is the SHA-256 of the canonical client-supplied fields only, never server-derived values such as `readyAt` or totals. Same key + same fingerprint → 201 with the stored booking and the re-issued token; same key + different fingerprint → 422 `idempotency_key_reused`.
 3. `PUBLIC_BOOKING_ENABLED` gate (503 when off) → slot window check.
 4. One `env.DB.batch`: customer upsert → penalty-balance zero guarded by
    `changes()=1` → booking `INSERT … WHERE` slot/promo/balance guards → promo
    redemption increment → penalty allocation → status + audit events.
-5. Unique-index violation on `(pickup_date, pickup_slot)` → 409 "slot just
-   been taken"; `idempotency_key_hash` collision → replay path.
+5. Any unique-constraint violation first re-runs the replay lookup, so an overlapping identical retry that lost the race receives the winner's booking. Only when no booking exists for the key does a `(pickup_date, pickup_slot)` violation return 409 `slot_taken`.
 6. `expectedTotalCents` / `priceRevision` mismatch → 409 `quote_changed` —
    the client must re-show the server quote before retrying.
+Error codes: `quote_changed` (409, includes fee-balance changes), `slot_taken` (409), `slot_unavailable` (409), `idempotency_key_reused` (422).
 
 ## Tracking-token model
 

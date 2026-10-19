@@ -362,8 +362,8 @@ describe("ambiguous booking recovery after the pickup window closes", () => {
       ENVIRONMENT: "local", CUSTOMER_HOSTS: "localhost", PUBLIC_BOOKING_ENABLED: enabled,
       DB: { prepare: () => ({ bind: () => ({ first: async () => ({ request_payload_hash: "different" }) }) }) },
     });
-    expect(response.status).toBe(409);
-    expect(await response.json()).toEqual({ error: "This retry key was already used for a different booking" });
+    expect(response.status).toBe(422);
+    expect(await response.json()).toEqual({ error: "This retry key was already used for a different booking", code: "idempotency_key_reused" });
   });
 });
 
