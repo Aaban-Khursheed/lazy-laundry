@@ -97,7 +97,7 @@ files in `tests/worker.test.js`.
   (integer sen), `payment_method`/`payment_status`, `status`, cancellation
   reason/actor/at, `ready_at`, `revision` (optimistic concurrency), terms
   acceptance + policy version, `promo_code`, `operator_reminded_at`
-  (pre-pickup reminder digest dedupe).
+  (pre-pickup reminder digest dedupe), `customer_anonymized_at` (retention).
   - **Key constraint:** `bookings_one_active_per_pickup_slot` — partial
     unique index on `(pickup_date, pickup_slot) WHERE status <> 'cancelled'`.
     Double-booking is impossible below the application layer.
@@ -155,6 +155,20 @@ Error codes: `quote_changed` (409, includes fee-balance changes), `slot_taken` (
   booking reminds once and a failed send retries next tick. `LIMIT 50`.
 - Emails carry the fields the operator needs (address, phone, `wa.me`,
   service, total); tracking tokens are never included.
+- The same cron runs the retention pass (`runRetentionPass`): terminal
+  bookings (`delivered`/`cancelled`) whose `updated_at` is over 24 months old
+  have `customer_name`/`phone`/`block`/`unit` replaced with sentinels,
+  `customer_anonymized_at` stamped, audit `details_json` nulled (it holds
+  edit from/to PII), and `operator_notes` deleted (free text). Once none of a
+  customer's bookings remain identifiable, an `anon-<id>` replacement row is
+  inserted, children (`bookings`, `penalty_events` — note nulled,
+  `booking_audit_events`) repointed, and the original row deleted — freeing
+  the natural `customer-<digits>` id and phone so a returning customer can
+  re-book (the upsert conflicts on `phone_e164` only). Customers with an
+  outstanding `penalty_balance_cents` are skipped entirely — the notice
+  excepts records needed for an unresolved fee. `LIMIT 25` per pass;
+  failures log `retention_pass_failed`. This fulfils the privacy notice's
+  24-month retention promise while keeping order/financial history.
 
 ## Operator authentication
 

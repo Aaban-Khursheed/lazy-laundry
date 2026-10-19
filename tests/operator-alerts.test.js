@@ -12,6 +12,11 @@ function fakeDB() {
   const byKey = new Map();
   const byId = new Map();
   const reminderRows = [];
+  const retentionRows = [];
+  const customers = [];
+  const auditEvents = [];
+  const notes = [];
+  const penalties = [];
   const statement = (sql, params = []) => ({
     sql,
     params,
@@ -28,6 +33,21 @@ function fakeDB() {
           results: reminderRows.filter((row) => row.status === "confirmed" && !row.operator_reminded_at
             && row.created_at <= params[0]
             && Date.parse(`${row.pickup_date}T${row.pickup_slot}:00+08:00`) <= Date.parse(params[1])),
+        };
+      }
+      if (sql.includes("SELECT id FROM customers c")) {
+        return {
+          results: customers.filter((c) => !c.anonymized_at && !c.id.startsWith("anon-")
+            && c.penalty_balance_cents === 0
+            && !retentionRows.some((b) => b.customer_id === c.id && !b.customer_anonymized_at)).slice(0, params[0]),
+        };
+      }
+      if (sql.includes("SELECT id, customer_id FROM bookings")) {
+        return {
+          results: retentionRows.filter((row) => !row.customer_anonymized_at
+            && (row.status === "delivered" || row.status === "cancelled")
+            && row.updated_at <= params[0]
+            && !customers.some((c) => c.id === row.customer_id && c.penalty_balance_cents > 0)).slice(0, params[1]),
         };
       }
       return { results: [] };
@@ -56,14 +76,44 @@ function fakeDB() {
         return statements.map(() => ({ meta: { changes: 1 } }));
       }
       for (const s of statements) {
-        if (!s.sql.includes("UPDATE bookings SET operator_reminded_at")) throw new Error(`Unexpected batch(): ${s.sql}`);
-        const row = reminderRows.find((r) => r.id === s.params[1]);
-        if (row && !row.operator_reminded_at) row.operator_reminded_at = s.params[0];
+        if (s.sql.includes("UPDATE bookings SET operator_reminded_at")) {
+          const row = reminderRows.find((r) => r.id === s.params[1]);
+          if (row && !row.operator_reminded_at) row.operator_reminded_at = s.params[0];
+        } else if (s.sql.includes("customer_name = ?")) {
+          const row = retentionRows.find((r) => r.id === s.params[5]);
+          if (row && !row.customer_anonymized_at) {
+            Object.assign(row, { customer_name: s.params[0], phone: s.params[1], block: s.params[2], unit: s.params[3], customer_anonymized_at: s.params[4] });
+          }
+        } else if (s.sql.includes("details_json = NULL")) {
+          for (const e of auditEvents) if (e.booking_id === s.params[0]) e.details_json = null;
+        } else if (s.sql.includes("DELETE FROM operator_notes")) {
+          for (let i = notes.length - 1; i >= 0; i--) if (notes[i].booking_id === s.params[0]) notes.splice(i, 1);
+        } else if (s.sql.includes("INSERT INTO customers")) {
+          const customer = customers.find((c) => c.id === s.params[2]);
+          if (customer && !customer.anonymized_at) {
+            customers.push({
+              id: `anon-${customer.id}`, phone_e164: `anon-${customer.phone_e164.slice(-11)}`,
+              penalty_balance_cents: customer.penalty_balance_cents, created_at: customer.created_at,
+              updated_at: s.params[0], anonymized_at: s.params[1],
+            });
+          }
+        } else if (s.sql.includes("UPDATE bookings SET customer_id")) {
+          for (const row of retentionRows) if (row.customer_id === s.params[0]) row.customer_id = `anon-${row.customer_id}`;
+        } else if (s.sql.includes("UPDATE penalty_events")) {
+          for (const p of penalties) if (p.customer_id === s.params[0]) { p.customer_id = `anon-${p.customer_id}`; p.note = null; }
+        } else if (s.sql.includes("UPDATE booking_audit_events SET customer_id")) {
+          for (const e of auditEvents) if (e.customer_id === s.params[0]) e.customer_id = `anon-${e.customer_id}`;
+        } else if (s.sql.includes("DELETE FROM customers")) {
+          const i = customers.findIndex((c) => c.id === s.params[0]);
+          if (i >= 0) customers.splice(i, 1);
+        } else {
+          throw new Error(`Unexpected batch(): ${s.sql}`);
+        }
       }
       return statements.map(() => ({ meta: { changes: 1 } }));
     },
   };
-  return { db, reminderRows, byId };
+  return { db, reminderRows, retentionRows, customers, auditEvents, notes, penalties, byId };
 }
 
 function bookingRequest(key = KEY) {
@@ -218,5 +268,126 @@ describe("pickup reminders", () => {
     await Promise.all(ctx.promises);
 
     expect(email.send).not.toHaveBeenCalled();
+  });
+});
+
+describe("retention anonymization", () => {
+  const OLD = "2024-05-01T00:00:00.000Z"; // ~29 months before the test clock — past the 24-month retention window
+  const RECENT = "2026-09-01T00:00:00.000Z";
+
+  const seedBooking = (retentionRows, overrides = {}) => retentionRows.push({
+    id: crypto.randomUUID(), booking_number: "LL-OLD00001", customer_id: "customer-60123456789",
+    customer_name: "Old Customer", phone: "+60123456789", block: "Block A", unit: "A-1-01",
+    status: "delivered", updated_at: OLD, customer_anonymized_at: null, ...overrides,
+  });
+
+  const seedCustomer = (customers, overrides = {}) => customers.push({
+    id: "customer-60123456789", phone_e164: "+60123456789",
+    penalty_balance_cents: 0, created_at: OLD, updated_at: OLD, anonymized_at: null, ...overrides,
+  });
+
+  const runCron = async (db, email = { send: vi.fn(async () => ({ messageId: "m" })) }) => {
+    const ctx = fakeCtx();
+    await worker.scheduled({ cron: "*/15 * * * *" }, envFor(db, email), ctx);
+    await Promise.all(ctx.promises);
+    return email;
+  };
+
+  it("anonymizes terminal bookings older than 12 months and frees the customer identity", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-20T18:00:00+08:00"));
+    const { db, retentionRows, customers, auditEvents, notes, penalties } = fakeDB();
+    seedBooking(retentionRows);
+    seedCustomer(customers);
+    auditEvents.push({ booking_id: retentionRows[0].id, customer_id: "customer-60123456789", details_json: '{"changes":{"phone":{"from":"+60123456789","to":"+60999"}}}' });
+    notes.push({ booking_id: retentionRows[0].id, note: "customer called twice" });
+    penalties.push({ customer_id: "customer-60123456789", note: "waived after chat" });
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runCron(db);
+
+    const booking = retentionRows[0];
+    expect(booking.customer_name).toBe("Former customer");
+    expect(booking.phone).toBe("removed");
+    expect(booking.block).toBe("removed");
+    expect(booking.unit).toBe("removed");
+    expect(booking.customer_anonymized_at).toBeTruthy();
+    expect(booking.customer_id).toBe("anon-customer-60123456789");
+    expect(notes).toHaveLength(0);
+    expect(auditEvents[0].details_json).toBeNull();
+    expect(auditEvents[0].customer_id).toBe("anon-customer-60123456789");
+    expect(penalties[0].customer_id).toBe("anon-customer-60123456789");
+    expect(penalties[0].note).toBeNull();
+
+    // The natural id and phone are free again, so a returning customer can re-book.
+    expect(customers.find((c) => c.id === "customer-60123456789")).toBeUndefined();
+    const anon = customers.find((c) => c.id === "anon-customer-60123456789");
+    expect(anon).toBeTruthy();
+    expect(anon.phone_e164).toBe("anon-60123456789");
+    expect(anon.penalty_balance_cents).toBe(0);
+
+    // Logs carry counts only — never PII.
+    const logged = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(logged).toContain("retention_anonymized");
+    expect(logged).not.toContain("60123456789");
+    expect(logged).not.toContain("Old Customer");
+  });
+
+  it("leaves recent or active bookings and their customer identifiable", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-20T18:00:00+08:00"));
+    const { db, retentionRows, customers } = fakeDB();
+    seedBooking(retentionRows, { updated_at: RECENT });
+    seedBooking(retentionRows, { id: crypto.randomUUID(), status: "confirmed", updated_at: OLD });
+    seedCustomer(customers);
+    await runCron(db);
+
+    expect(retentionRows[0].customer_anonymized_at).toBeNull();
+    expect(retentionRows[1].customer_anonymized_at).toBeNull();
+    expect(customers.find((c) => c.id === "customer-60123456789")).toBeTruthy();
+  });
+
+  it("keeps the customer row while any booking stays identifiable", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-20T18:00:00+08:00"));
+    const { db, retentionRows, customers } = fakeDB();
+    seedBooking(retentionRows);
+    seedBooking(retentionRows, { id: crypto.randomUUID(), updated_at: RECENT });
+    seedCustomer(customers);
+    await runCron(db);
+
+    expect(retentionRows[0].customer_anonymized_at).toBeTruthy();
+    expect(retentionRows[1].customer_anonymized_at).toBeNull();
+    expect(customers.find((c) => c.id === "customer-60123456789")).toBeTruthy();
+    expect(customers.find((c) => c.id === "anon-customer-60123456789")).toBeUndefined();
+  });
+
+  it("keeps records needed for an outstanding penalty until it is resolved", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-20T18:00:00+08:00"));
+    const { db, retentionRows, customers } = fakeDB();
+    seedBooking(retentionRows);
+    seedCustomer(customers, { penalty_balance_cents: 300 });
+    await runCron(db);
+
+    expect(retentionRows[0].customer_anonymized_at).toBeNull();
+    expect(retentionRows[0].phone).toBe("+60123456789");
+    expect(customers.find((c) => c.id === "customer-60123456789")).toBeTruthy();
+    expect(customers.find((c) => c.id.startsWith("anon-"))).toBeUndefined();
+  });
+
+  it("does not reprocess an already anonymized customer", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-20T18:00:00+08:00"));
+    const { db, retentionRows, customers } = fakeDB();
+    seedBooking(retentionRows, { customer_name: "Former customer", phone: "removed", block: "removed", unit: "removed", customer_anonymized_at: OLD });
+    seedCustomer(customers);
+    await runCron(db);
+
+    // Customer anonymizes (all bookings scrubbed); second run is a no-op.
+    expect(customers.find((c) => c.id === "customer-60123456789")).toBeUndefined();
+    const anonId = customers[0].id;
+    await runCron(db);
+    expect(customers.filter((c) => c.id === anonId)).toHaveLength(1);
+    expect(customers).toHaveLength(1);
   });
 });

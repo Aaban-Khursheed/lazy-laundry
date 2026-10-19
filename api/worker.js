@@ -435,6 +435,88 @@ async function runPickupReminders(env) {
   ).bind(stamp, row.id)));
 }
 
+// Privacy notice retention promise: customer identity is anonymized up to 24
+// months after a terminal booking, while order history (numbers, dates,
+// totals, status, audit skeleton) is kept. Customers with an outstanding
+// penalty balance are skipped — the notice excepts records needed for an
+// unresolved fee. Batches stay small so a backlog drains across cron runs.
+const RETENTION_MS = 730 * 24 * 60 * 60 * 1000;
+const RETENTION_BATCH_LIMIT = 25;
+const ANONYMIZED_NAME = "Former customer";
+const ANONYMIZED_FIELD = "removed";
+
+async function runRetentionPass(env, now = Date.now()) {
+  if (!env?.DB?.prepare) return { bookings: 0, customers: 0 };
+  const cutoff = new Date(now - RETENTION_MS).toISOString();
+  const stamp = new Date(now).toISOString();
+
+  const due = await env.DB.prepare(`
+    SELECT id, customer_id FROM bookings
+    WHERE customer_anonymized_at IS NULL
+      AND status IN ('delivered', 'cancelled')
+      AND updated_at <= ?
+      AND NOT EXISTS (
+        SELECT 1 FROM customers c
+        WHERE c.id = bookings.customer_id AND c.penalty_balance_cents > 0
+      )
+    ORDER BY updated_at
+    LIMIT ?
+  `).bind(cutoff, RETENTION_BATCH_LIMIT).all();
+  const bookings = due?.results || [];
+  if (bookings.length) {
+    const statements = [];
+    for (const row of bookings) {
+      statements.push(
+        env.DB.prepare(
+          "UPDATE bookings SET customer_name = ?, phone = ?, block = ?, unit = ?, customer_anonymized_at = ? WHERE id = ? AND customer_anonymized_at IS NULL",
+        ).bind(ANONYMIZED_NAME, ANONYMIZED_FIELD, ANONYMIZED_FIELD, ANONYMIZED_FIELD, stamp, row.id),
+        env.DB.prepare("UPDATE booking_audit_events SET details_json = NULL WHERE booking_id = ?").bind(row.id),
+        env.DB.prepare("DELETE FROM operator_notes WHERE booking_id = ?").bind(row.id),
+      );
+    }
+    await env.DB.batch(statements);
+  }
+
+  // A customer row may be anonymized once none of its bookings remain
+  // identifiable. The natural id (`customer-<digits>`) and phone are freed so
+  // a returning customer can register again; an anon-* replacement row keeps
+  // bookings/penalty_events/booking_audit_events referentially intact. Order:
+  // insert replacement parent, repoint children, delete the original.
+  const stale = await env.DB.prepare(`
+    SELECT id FROM customers c
+    WHERE c.anonymized_at IS NULL AND c.id NOT LIKE 'anon-%'
+      AND c.penalty_balance_cents = 0
+      AND NOT EXISTS (
+        SELECT 1 FROM bookings b WHERE b.customer_id = c.id AND b.customer_anonymized_at IS NULL
+      )
+    ORDER BY c.updated_at
+    LIMIT ?
+  `).bind(RETENTION_BATCH_LIMIT).all();
+  const customers = stale?.results || [];
+  if (customers.length) {
+    const statements = [];
+    for (const row of customers) {
+      statements.push(
+        env.DB.prepare(`
+          INSERT INTO customers (id, phone_e164, penalty_balance_cents, created_at, updated_at, anonymized_at)
+          SELECT 'anon-' || c.id, 'anon-' || substr(c.phone_e164, -11), c.penalty_balance_cents, c.created_at, ?, ?
+          FROM customers c WHERE c.id = ? AND c.anonymized_at IS NULL
+        `).bind(stamp, stamp, row.id),
+        env.DB.prepare("UPDATE bookings SET customer_id = 'anon-' || customer_id WHERE customer_id = ?").bind(row.id),
+        env.DB.prepare("UPDATE penalty_events SET customer_id = 'anon-' || customer_id, note = NULL WHERE customer_id = ?").bind(row.id),
+        env.DB.prepare("UPDATE booking_audit_events SET customer_id = 'anon-' || customer_id WHERE customer_id = ?").bind(row.id),
+        env.DB.prepare("DELETE FROM customers WHERE id = ?").bind(row.id),
+      );
+    }
+    await env.DB.batch(statements);
+  }
+
+  if (bookings.length || customers.length) {
+    console.log(JSON.stringify({ event: "retention_anonymized", bookings: bookings.length, customers: customers.length }));
+  }
+  return { bookings: bookings.length, customers: customers.length };
+}
+
 function priceInCents(packageSize, service, hangers) {
   const base = packageSize === 10 ? 2999 : 5499;
   const express = packageSize === 10 ? 1000 : 1500;
@@ -2259,6 +2341,9 @@ export default {
   async scheduled(event, env, ctx) {
     ctx.waitUntil(runPickupReminders(env).catch((error) => {
       console.error(JSON.stringify({ event: "pickup_reminder_failed", errorType: error instanceof Error ? error.name : "unknown" }));
+    }));
+    ctx.waitUntil(runRetentionPass(env).catch((error) => {
+      console.error(JSON.stringify({ event: "retention_pass_failed", errorType: error instanceof Error ? error.name : "unknown" }));
     }));
   },
 };

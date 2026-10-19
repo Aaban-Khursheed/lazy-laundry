@@ -152,6 +152,16 @@ Structured `console.error` events worth alerting on / grepping in Logs:
   test pin the contract (express 6h, standard 12h or 15h for evening
   pickups). Change it only with an owner decision — the tracking page shows
   this time as a commitment.
+- **Customer PII is anonymized 24 months after a booking reaches a terminal
+  state** (the privacy notice's published window). The `*/15` cron runs
+  `runRetentionPass`: name/phone/block/unit become sentinels, audit
+  `details_json` and `operator_notes` (free text) are cleared, and
+  fully-anonymized customers are replaced by `anon-` rows so a returning
+  phone can re-book. Customers with an outstanding penalty balance are
+  skipped — the notice excepts records needed for an unresolved fee. Order
+  history and money fields are kept. It is irreversible by design; if the
+  business later needs to reach old customers, change the retention window,
+  not the mechanism.
 - **`workers_dev` stays enabled** — `hostRole` 404s it, so it serves nothing;
   kept for preview/dry-run convenience.
 - **HSTS is `max-age=15552000; includeSubDomains`** — consider `preload` only
