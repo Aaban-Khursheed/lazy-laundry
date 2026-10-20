@@ -44,10 +44,17 @@ Only change it on the owner's instruction.
 ## Deploy & rollback
 
 ```bash
-npm run deploy:dry-run   # gate: lint + unit + bundle
-npm run deploy           # production deploy
-wrangler rollback        # restore previous Worker code
+npm run db:check                                      # 1. review pending migrations
+wrangler d1 migrations apply lazylaundry-db --remote  # 2. ALWAYS --remote, BEFORE deploy
+npm run deploy:dry-run                                # 3. gate: lint + unit + bundle
+npm run deploy                                        # 4. production deploy
+wrangler rollback                                     # 5. restore previous Worker code
 ```
+
+**Order matters:** code that queries a not-yet-migrated column/table serves
+503s until the migration lands. Remote-apply first, deploy second — learned
+the hard way (2026-10-21: availability 503 for ~7 min because `0010` was
+missing remotely while the deployed code referenced `removed_at`).
 
 Rollback restores **code only** — applied migrations stay. Deploy
 migration-compatible code first, or apply the migration and deploy together.
