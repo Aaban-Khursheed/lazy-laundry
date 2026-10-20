@@ -28,6 +28,7 @@ function fakeDB() {
           && ["confirmed", "pickup_on_the_way", "laundry_picked_up", "processing", "ready"].includes(r.status)).length;
         return { n };
       }
+      if (sql.includes("FROM blocked_slots")) return null;
       if (sql.includes("FROM customers WHERE id = ?")) return null;
       if (sql.includes("SELECT * FROM bookings WHERE id = ?")) return byId.get(params[0]) ?? null;
       throw new Error(`Unexpected first(): ${sql}`);

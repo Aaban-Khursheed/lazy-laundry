@@ -256,11 +256,26 @@ function isValidDate(dateString) {
   return Number.isFinite(parsed.getTime()) && dateInKualaLumpur(parsed) === dateString;
 }
 
-function isScheduledSlot(dateString, slot) {
+const DEFAULT_WEEKDAY_SLOTS = ["19:00", "20:00", "21:00"];
+const DEFAULT_WEEKEND_SLOTS = ["10:00", "11:00", "12:00", "19:00", "20:00", "21:00"];
+
+function parseSlotList(raw, fallback) {
+  if (typeof raw !== "string" || !raw.trim()) return fallback;
+  const slots = raw.split(",").map((slot) => slot.trim());
+  const valid = slots.length > 0 && slots.length <= 12 && slots.every((slot) => /^([01]\d|2[0-3]):[0-5]\d$/.test(slot));
+  return valid ? [...new Set(slots)].sort() : fallback;
+}
+
+function scheduleFor(env) {
+  return {
+    weekday: parseSlotList(env?.PICKUP_SLOTS_WEEKDAY, DEFAULT_WEEKDAY_SLOTS),
+    weekend: parseSlotList(env?.PICKUP_SLOTS_WEEKEND, DEFAULT_WEEKEND_SLOTS),
+  };
+}
+
+function isScheduledSlot(dateString, slot, schedule = { weekday: DEFAULT_WEEKDAY_SLOTS, weekend: DEFAULT_WEEKEND_SLOTS }) {
   const weekday = new Date(`${dateString}T12:00:00+08:00`).getUTCDay();
-  const evening = ["19:00", "20:00", "21:00"];
-  const weekendMorning = ["10:00", "11:00", "12:00"];
-  return evening.includes(slot) || ((weekday === 0 || weekday === 6) && weekendMorning.includes(slot));
+  return (weekday === 0 || weekday === 6 ? schedule.weekend : schedule.weekday).includes(slot);
 }
 
 const DEFAULT_BOOKING_LEAD_MINUTES = 60;
@@ -280,8 +295,21 @@ function activeBookingLimit(env) {
   return Math.min(10, Math.max(1, value));
 }
 
-function isPickupSlotAvailable(dateString, slot, leadMinutes = DEFAULT_BOOKING_LEAD_MINUTES) {
-  if (!isValidDate(dateString) || !isScheduledSlot(dateString, slot)) {
+async function slotBlockFor(env, dateString, slot) {
+  if (!env?.DB?.prepare) return null;
+  return await env.DB.prepare(
+    "SELECT id, reason FROM blocked_slots WHERE pickup_date = ? AND (pickup_slot IS NULL OR pickup_slot = ?)",
+  ).bind(dateString, slot).first();
+}
+
+const BLOCKED_SLOT_GUARD_SQL = `
+      AND NOT EXISTS (
+        SELECT 1 FROM blocked_slots
+        WHERE pickup_date = ? AND (pickup_slot IS NULL OR pickup_slot = ?)
+      )`;
+
+function isPickupSlotAvailable(dateString, slot, leadMinutes = DEFAULT_BOOKING_LEAD_MINUTES, schedule) {
+  if (!isValidDate(dateString) || !isScheduledSlot(dateString, slot, schedule)) {
     return false;
   }
   const today = dateInKualaLumpur();
@@ -597,7 +625,7 @@ function promoFromRow(row) {
 
 const BOOKING_FIELDS = new Set(["name", "phone", "block", "unit", "packageSize", "service", "hangers", "pickupDate", "pickupSlot", "paymentMethod", "promoCode", "termsAccepted", "priceRevision", "expectedTotalCents"]);
 
-function validateBooking(input) {
+function validateBooking(input, env) {
   if (!input || typeof input !== "object" || Array.isArray(input)) return null;
   if (Object.keys(input).some((key) => !BOOKING_FIELDS.has(key))) return null;
   const name = typeof input.name === "string" ? input.name.trim() : "";
@@ -618,7 +646,7 @@ function validateBooking(input) {
   if (!UNIT_PREFIXES[block]?.includes(unitPrefix)) return null;
   if (![10, 18].includes(packageSize) || !["standard", "express"].includes(service)) return null;
   if (!["cash", "qr"].includes(paymentMethod) || input.termsAccepted !== true) return null;
-  if (!isValidDate(pickupDate) || !isScheduledSlot(pickupDate, pickupSlot)) return null;
+  if (!isValidDate(pickupDate) || !isScheduledSlot(pickupDate, pickupSlot, scheduleFor(env))) return null;
   const priceRevision = input.priceRevision === undefined ? "" : typeof input.priceRevision === "string" && input.priceRevision.length <= 80 ? input.priceRevision : null;
   const expectedTotalCents = input.expectedTotalCents === undefined ? null : Number.isInteger(input.expectedTotalCents) && input.expectedTotalCents >= 0 ? input.expectedTotalCents : null;
   if (priceRevision === null || expectedTotalCents === null && input.expectedTotalCents !== undefined) return null;
@@ -782,7 +810,7 @@ async function createBooking(request, env, cors, ctx) {
     return jsonResponse({ error: "A retry key is required" }, 400, cors);
   }
   const input = await readJson(request);
-  const booking = validateBooking(input);
+  const booking = validateBooking(input, env);
   if (!booking) {
     return jsonResponse({ error: "Booking details are invalid or the pickup slot is unavailable" }, 400, cors);
   }
@@ -793,7 +821,10 @@ async function createBooking(request, env, cors, ctx) {
   if (env.PUBLIC_BOOKING_ENABLED !== "true") {
     return jsonResponse({ error: "Booking intake is not enabled" }, 503, cors);
   }
-  if (!isPickupSlotAvailable(booking.pickupDate, booking.pickupSlot, bookingLeadMinutes(env))) {
+  if (!isPickupSlotAvailable(booking.pickupDate, booking.pickupSlot, bookingLeadMinutes(env), scheduleFor(env))) {
+    return jsonResponse({ error: "The pickup slot is no longer available", code: "slot_unavailable" }, 409, cors);
+  }
+  if (await slotBlockFor(env, booking.pickupDate, booking.pickupSlot)) {
     return jsonResponse({ error: "The pickup slot is no longer available", code: "slot_unavailable" }, 409, cors);
   }
   const customerId = customerIdForPhone(booking.phone);
@@ -856,14 +887,15 @@ async function createBooking(request, env, cors, ctx) {
         SELECT 1 FROM promotions WHERE code = ? AND active = 1
           AND (max_redemptions IS NULL OR redemptions < max_redemptions)
       ))
-      AND (SELECT COUNT(*) FROM bookings WHERE phone = ? AND status IN ${ACTIVE_BOOKING_STATUSES}) < ?
+      AND (SELECT COUNT(*) FROM bookings WHERE phone = ? AND status IN ${ACTIVE_BOOKING_STATUSES}) < ?${BLOCKED_SLOT_GUARD_SQL}
   `).bind(
     id, bookingNumber, trackingTokenHash, encryptedTrackingToken, keyHash, payloadHash, customerId,
     booking.name, booking.phone, booking.block, booking.unit, booking.packageSize, booking.service,
     booking.hangers ? 1 : 0, booking.pickupDate, booking.pickupSlot, booking.serviceTotalCents,
     feeTotalCents, totalCents, booking.paymentMethod, appliedPromo?.code || null, discountCents,
     booking.readyAt, createdAt, env.TERMS_POLICY_VERSION || "launch-v1", createdAt, createdAt,
-    feeTotalCents, appliedPromo?.code || null, appliedPromo?.code || null, booking.phone, activeLimit
+    feeTotalCents, appliedPromo?.code || null, appliedPromo?.code || null, booking.phone, activeLimit,
+    booking.pickupDate, booking.pickupSlot
   );
   statements.push(bookingStatement);
   const bookingResultIndex = statements.length - 1;
@@ -895,6 +927,9 @@ async function createBooking(request, env, cors, ctx) {
     if (bookingResult?.meta?.changes !== 1) {
       if (appliedPromo) return jsonResponse({ error: "That promo code is no longer available", code: "quote_changed" }, 409, cors);
       if (feeTotalCents > 0) return jsonResponse({ error: "The fee balance changed; refresh checkout and try again", code: "quote_changed" }, 409, cors);
+      if (await slotBlockFor(env, booking.pickupDate, booking.pickupSlot)) {
+        return jsonResponse({ error: "The pickup slot is no longer available", code: "slot_unavailable" }, 409, cors);
+      }
       const nowActive = await env.DB.prepare(
         `SELECT COUNT(*) AS n FROM bookings WHERE phone = ? AND status IN ${ACTIVE_BOOKING_STATUSES}`,
       ).bind(booking.phone).first();
@@ -931,6 +966,8 @@ async function getPublicConfig(env, cors) {
     bookingEnabled: env.PUBLIC_BOOKING_ENABLED === "true",
     priceRevision: env.PRICE_REVISION || "launch-v1",
     bookingLeadMinutes: bookingLeadMinutes(env),
+    weekdaySlots: scheduleFor(env).weekday,
+    weekendSlots: scheduleFor(env).weekend,
     turnstileSiteKey: typeof env.TURNSTILE_SITEKEY === "string" && env.TURNSTILE_SITEKEY ? env.TURNSTILE_SITEKEY : null,
   }, 200, cors);
 }
@@ -988,10 +1025,21 @@ async function getAvailability(request, env, cors) {
   if (!isValidDate(date) || date < dateInKualaLumpur() || date > addLocalDays(dateInKualaLumpur(), 6)) {
     return jsonResponse({ error: "Date is outside the booking window" }, 400, cors);
   }
-  const result = await env.DB.prepare(`
-    SELECT pickup_slot FROM bookings WHERE pickup_date = ? AND status <> 'cancelled'
-  `).bind(date).all();
-  return jsonResponse({ date, bookedSlots: result.results.map((row) => row.pickup_slot) }, 200, cors);
+  const [result, blocks] = await Promise.all([
+    env.DB.prepare(`
+      SELECT pickup_slot FROM bookings WHERE pickup_date = ? AND status <> 'cancelled'
+    `).bind(date).all(),
+    env.DB.prepare(`
+      SELECT pickup_slot, reason FROM blocked_slots WHERE pickup_date = ?
+    `).bind(date).all(),
+  ]);
+  const blockedRows = blocks?.results || [];
+  return jsonResponse({
+    date,
+    bookedSlots: result.results.map((row) => row.pickup_slot),
+    blockedSlots: blockedRows.map((row) => row.pickup_slot).filter(Boolean),
+    blockedDate: blockedRows.some((row) => row.pickup_slot === null),
+  }, 200, cors);
 }
 
 async function getTracking(request, env, cors) {
@@ -1146,21 +1194,25 @@ async function rescheduleCustomerBooking(request, env, cors, ctx) {
   if (customerCancellationIsLate(current)) return jsonResponse({ error: "Rescheduling is closed for this pickup" }, 409, cors);
   const pickupDate = typeof input?.pickupDate === "string" ? input.pickupDate : "";
   const pickupSlot = typeof input?.pickupSlot === "string" ? input.pickupSlot : "";
-  if (!isPickupSlotAvailable(pickupDate, pickupSlot, bookingLeadMinutes(env))) return jsonResponse({ error: "The new pickup slot is unavailable", code: "slot_unavailable" }, 409, cors);
+  if (!isPickupSlotAvailable(pickupDate, pickupSlot, bookingLeadMinutes(env), scheduleFor(env))) return jsonResponse({ error: "The new pickup slot is unavailable", code: "slot_unavailable" }, 409, cors);
+  if (await slotBlockFor(env, pickupDate, pickupSlot)) return jsonResponse({ error: "The new pickup slot is unavailable", code: "slot_unavailable" }, 409, cors);
   const now = new Date().toISOString();
   const auditId = crypto.randomUUID();
   try {
     const results = await env.DB.batch([
       env.DB.prepare(`
         UPDATE bookings SET pickup_date = ?, pickup_slot = ?, ready_at = ?, updated_at = ?, revision = revision + 1
-        WHERE id = ? AND revision = ? AND status NOT IN ('cancelled', 'delivered', 'laundry_picked_up', 'processing', 'ready')
-      `).bind(pickupDate, pickupSlot, readyAtFor(pickupDate, pickupSlot, current.service), now, current.id, current.revision),
+        WHERE id = ? AND revision = ? AND status NOT IN ('cancelled', 'delivered', 'laundry_picked_up', 'processing', 'ready')${BLOCKED_SLOT_GUARD_SQL}
+      `).bind(pickupDate, pickupSlot, readyAtFor(pickupDate, pickupSlot, current.service), now, current.id, current.revision, pickupDate, pickupSlot),
       env.DB.prepare(`
         INSERT INTO booking_audit_events (id, booking_id, customer_id, event_type, details_json, created_at)
         SELECT ?, ?, ?, 'customer_rescheduled', ?, ? WHERE changes() = 1
       `).bind(auditId, current.id, current.customer_id, JSON.stringify({ fromDate: current.pickup_date, fromSlot: current.pickup_slot, toDate: pickupDate, toSlot: pickupSlot }), now),
     ]);
-    if (results[0]?.meta?.changes !== 1) return jsonResponse({ error: "Booking changed; refresh and try again" }, 409, cors);
+    if (results[0]?.meta?.changes !== 1) {
+      if (await slotBlockFor(env, pickupDate, pickupSlot)) return jsonResponse({ error: "The new pickup slot is unavailable", code: "slot_unavailable" }, 409, cors);
+      return jsonResponse({ error: "Booking changed; refresh and try again" }, 409, cors);
+    }
     const row = await env.DB.prepare("SELECT * FROM bookings WHERE id = ?").bind(current.id).first();
     queueOperatorAlert(ctx, env, "customer_rescheduled", row, { fromDate: current.pickup_date, fromSlot: current.pickup_slot });
     return jsonResponse({ booking: bookingForClient(row) }, 200, cors);
@@ -1714,7 +1766,7 @@ async function updateOperatorBooking(request, env, id, actor, cors) {
     }
     const pickupDate = typeof input.pickupDate === "string" && input.pickupDate ? input.pickupDate : current.pickup_date;
     const pickupSlot = typeof input.pickupSlot === "string" && input.pickupSlot ? input.pickupSlot : current.pickup_slot;
-    if (!isPickupSlotAvailable(pickupDate, pickupSlot, 0)) {
+    if (!isPickupSlotAvailable(pickupDate, pickupSlot, 0, scheduleFor(env))) {
       return jsonResponse({ error: "The pickup slot is no longer available" }, 409, cors);
     }
     statements = [
@@ -1761,10 +1813,10 @@ async function updateOperatorBooking(request, env, id, actor, cors) {
       || !UNIT_PREFIXES[merged.block]?.includes(merged.unit.slice(0, 1).toUpperCase())
       || ![10, 18].includes(merged.packageSize) || !["standard", "express"].includes(merged.service)
       || !["cash", "qr"].includes(merged.paymentMethod)
-      || (slotChanged && (!isValidDate(merged.pickupDate) || !isScheduledSlot(merged.pickupDate, merged.pickupSlot)))) {
+      || (slotChanged && (!isValidDate(merged.pickupDate) || !isScheduledSlot(merged.pickupDate, merged.pickupSlot, scheduleFor(env))))) {
       return jsonResponse({ error: "Invalid edit fields" }, 400, cors);
     }
-    if (slotChanged && !isPickupSlotAvailable(merged.pickupDate, merged.pickupSlot, 0)) {
+    if (slotChanged && !isPickupSlotAvailable(merged.pickupDate, merged.pickupSlot, 0, scheduleFor(env))) {
       return jsonResponse({ error: "The pickup slot is no longer available" }, 409, cors);
     }
     const serviceChanged = merged.packageSize !== current.package_size || merged.service !== current.service || merged.hangers !== Boolean(current.hangers);
@@ -2227,7 +2279,73 @@ async function requireOperator(request, env, cors) {
   return { email: auth.email };
 }
 
-export { bookingFingerprint, bookingLeadMinutes, canonicalize, csvCell, customerCancellationIsLate, isPickupSlotAvailable, isScheduledSlot, isValidDate, makeTrackingToken, normalizePromoCode, priceInCents, promoDiscountCents, promoEligibility, promoStoredValue };
+function blockedSlotForClient(row) {
+  return {
+    id: row.id,
+    pickupDate: row.pickup_date,
+    pickupSlot: row.pickup_slot,
+    reason: row.reason || "",
+    createdAt: row.created_at,
+  };
+}
+
+async function getOperatorBlockedSlots(env, cors) {
+  const result = await env.DB.prepare(`
+    SELECT id, pickup_date, pickup_slot, reason, created_at FROM blocked_slots
+    WHERE pickup_date >= ? ORDER BY pickup_date, pickup_slot
+  `).bind(dateInKualaLumpur()).all();
+  return jsonResponse({
+    blocks: (result?.results || []).map(blockedSlotForClient),
+    weekdaySlots: scheduleFor(env).weekday,
+    weekendSlots: scheduleFor(env).weekend,
+  }, 200, cors);
+}
+
+async function createOperatorBlockedSlot(request, env, actor, cors) {
+  const input = await readJson(request);
+  const pickupDate = typeof input?.pickupDate === "string" ? input.pickupDate : "";
+  const pickupSlot = typeof input?.pickupSlot === "string" ? input.pickupSlot : null;
+  const reason = typeof input?.reason === "string" ? input.reason.trim().slice(0, 120) : "";
+  if (!isValidDate(pickupDate) || pickupDate < dateInKualaLumpur()) {
+    return jsonResponse({ error: "A valid future pickup date is required" }, 400, cors);
+  }
+  if (pickupSlot !== null && !isScheduledSlot(pickupDate, pickupSlot, scheduleFor(env))) {
+    return jsonResponse({ error: "That slot is not part of the pickup schedule" }, 400, cors);
+  }
+  const affected = await env.DB.prepare(`
+    SELECT COUNT(*) AS n FROM bookings
+    WHERE pickup_date = ? AND status NOT IN ('cancelled', 'delivered')
+      AND (? IS NULL OR pickup_slot = ?)
+  `).bind(pickupDate, pickupSlot, pickupSlot).first();
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  try {
+    await env.DB.prepare(`
+      INSERT INTO blocked_slots (id, pickup_date, pickup_slot, reason, created_by, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).bind(id, pickupDate, pickupSlot, reason || null, actor || null, now).run();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (message.includes("UNIQUE constraint failed")) {
+      return jsonResponse({ error: "That pickup slot is already blocked", code: "already_blocked" }, 409, cors);
+    }
+    throw error;
+  }
+  console.log(JSON.stringify({ event: "blocked_slot_created", pickupDate, pickupSlot, affectedBookings: Number(affected?.n) || 0, actor }));
+  const row = await env.DB.prepare("SELECT * FROM blocked_slots WHERE id = ?").bind(id).first();
+  return jsonResponse({ block: blockedSlotForClient(row), affectedBookings: Number(affected?.n) || 0 }, 201, cors);
+}
+
+async function deleteOperatorBlockedSlot(env, id, actor, cors) {
+  const row = await env.DB.prepare("SELECT pickup_date, pickup_slot FROM blocked_slots WHERE id = ?").bind(id).first();
+  if (!row) return jsonResponse({ error: "Block not found" }, 404, cors);
+  const result = await env.DB.prepare("DELETE FROM blocked_slots WHERE id = ?").bind(id).run();
+  if (result?.meta?.changes !== 1) return jsonResponse({ error: "Block not found" }, 404, cors);
+  console.log(JSON.stringify({ event: "blocked_slot_removed", pickupDate: row.pickup_date, pickupSlot: row.pickup_slot, actor }));
+  return jsonResponse({ ok: true }, 200, cors);
+}
+
+export { bookingFingerprint, bookingLeadMinutes, canonicalize, csvCell, customerCancellationIsLate, isPickupSlotAvailable, isScheduledSlot, isValidDate, makeTrackingToken, normalizePromoCode, priceInCents, promoDiscountCents, promoEligibility, promoStoredValue, scheduleFor };
 
 export default {
   async fetch(request, env, ctx) {
@@ -2350,6 +2468,16 @@ export default {
         }
         if (request.method === "POST" && url.pathname === "/api/operator/promotions") {
           return await createOperatorPromotion(request, env, operator.email, cors || {});
+        }
+        if (request.method === "GET" && url.pathname === "/api/operator/blocked-slots") {
+          return await getOperatorBlockedSlots(env, cors || {});
+        }
+        if (request.method === "POST" && url.pathname === "/api/operator/blocked-slots") {
+          return await createOperatorBlockedSlot(request, env, operator.email, cors || {});
+        }
+        const blockedMatch = url.pathname.match(/^\/api\/operator\/blocked-slots\/([0-9a-f-]{36})$/i);
+        if (blockedMatch && request.method === "DELETE") {
+          return await deleteOperatorBlockedSlot(env, blockedMatch[1], operator.email, cors || {});
         }
         const promoMatch = url.pathname.match(/^\/api\/operator\/promotions\/([0-9a-f-]{36})$/i);
         if (promoMatch && request.method === "PATCH") {

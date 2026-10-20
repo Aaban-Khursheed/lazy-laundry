@@ -48,6 +48,8 @@ const formError = document.querySelector("#form-error");
 const submitButton = bookingForm.querySelector('[type="submit"]');
 
 let currentBookedSlots = new Set();
+let currentBlockedSlots = new Set();
+let currentBlockedDate = false;
 let loadedAvailabilityDate = "";
 let availabilityRequestId = 0;
 let currentEstimate = null;
@@ -221,6 +223,8 @@ function showAvailabilityMessage(message, retryDate = "") {
 async function loadAvailability(dateString, alignToAvailable) {
   const requestId = ++availabilityRequestId;
   currentBookedSlots = new Set();
+  currentBlockedSlots = new Set();
+  currentBlockedDate = false;
   loadedAvailabilityDate = "";
   const selectedSlot = pickupSlotInput.value;
   slotGrid.classList.toggle("weekend", isWeekend(dateString));
@@ -236,9 +240,15 @@ async function loadAvailability(dateString, alignToAvailable) {
     }
 
     currentBookedSlots = new Set(result.bookedSlots.filter((slot) => typeof slot === "string"));
+    currentBlockedSlots = new Set(Array.isArray(result.blockedSlots) ? result.blockedSlots.filter((slot) => typeof slot === "string") : []);
+    currentBlockedDate = result.blockedDate === true;
     loadedAvailabilityDate = dateString;
     pickupSlotInput.value = selectedSlot;
-    renderSlots(alignToAvailable);
+    if (currentBlockedDate) {
+      showAvailabilityMessage("Pickup is unavailable on this date. Choose another day.");
+    } else {
+      renderSlots(alignToAvailable);
+    }
   } catch (error) {
     if (requestId !== availabilityRequestId || pickupDateInput.value !== dateString || isBookingLocked()) {
       return;
@@ -260,6 +270,10 @@ function isDateSlotBooked(dateString, slot) {
   return currentBookedSlots.has(slot);
 }
 
+function isSlotBlocked(slot) {
+  return currentBlockedDate || currentBlockedSlots.has(slot);
+}
+
 export function renderSlots(alignToAvailable = false) {
   if (isBookingLocked()) return;
   const dateString = pickupDateInput.value;
@@ -278,16 +292,17 @@ export function renderSlots(alignToAvailable = false) {
   slots.forEach((slot) => {
     const button = document.createElement("button");
     const booked = isDateSlotBooked(dateString, slot);
+    const blocked = isSlotBlocked(slot);
     const inCurrentSchedule = isSlotInCurrentSchedule(dateString, slot);
     const expired = inCurrentSchedule && isSlotClosed(dateString, slot);
-    const state = booked ? "Booked" : !inCurrentSchedule ? "Coming soon" : expired ? "Closed" : "Open";
-    const stateClass = expired ? "expired" : state.toLowerCase().replaceAll(" ", "-");
+    const state = booked ? "Booked" : blocked ? "Closed" : !inCurrentSchedule ? "Coming soon" : expired ? "Closed" : "Open";
+    const stateClass = expired || blocked ? "expired" : state.toLowerCase().replaceAll(" ", "-");
     button.type = "button";
     button.className = `slot-button ${stateClass}`;
     button.innerHTML = `<strong>${formatSlot(slot)}</strong><small>${state}</small>`;
     button.dataset.slot = slot;
-    button.disabled = booked || !inCurrentSchedule || expired;
-    button.title = booked ? "Already booked" : !inCurrentSchedule ? "Coming soon" : expired ? `Booking closes ${getBookingLeadMinutes()} min before pickup` : "Open for booking";
+    button.disabled = booked || blocked || !inCurrentSchedule || expired;
+    button.title = booked ? "Already booked" : blocked ? "Not available for pickup" : !inCurrentSchedule ? "Coming soon" : expired ? `Booking closes ${getBookingLeadMinutes()} min before pickup` : "Open for booking";
     button.setAttribute("aria-label", `${formatSlot(slot)}, ${state.toLowerCase()}`);
     button.setAttribute("aria-pressed", String(slot === selectedSlot && !button.disabled));
 
@@ -328,13 +343,13 @@ export function renderSlots(alignToAvailable = false) {
     }
   });
 
-  if (selectedSlot && (!isSlotInCurrentSchedule(dateString, selectedSlot) || isDateSlotBooked(dateString, selectedSlot) || isSlotClosed(dateString, selectedSlot))) {
+  if (selectedSlot && (!isSlotInCurrentSchedule(dateString, selectedSlot) || isDateSlotBooked(dateString, selectedSlot) || isSlotBlocked(selectedSlot) || isSlotClosed(dateString, selectedSlot))) {
     pickupSlotInput.value = "";
   }
 
   if (alignToAvailable) {
     const slotButtons = [...slotGrid.querySelectorAll(".slot-button")];
-    const openIndex = slots.findIndex((slot) => isSlotInCurrentSchedule(dateString, slot) && !isDateSlotBooked(dateString, slot) && !isSlotClosed(dateString, slot));
+    const openIndex = slots.findIndex((slot) => isSlotInCurrentSchedule(dateString, slot) && !isDateSlotBooked(dateString, slot) && !isSlotBlocked(slot) && !isSlotClosed(dateString, slot));
     const target = slotButtons[openIndex >= 0 ? openIndex : slots.findIndex((slot) => isSlotInCurrentSchedule(dateString, slot))];
     if (target) {
       const targetOffset = target.getBoundingClientRect().left - slotGrid.getBoundingClientRect().left + slotGrid.scrollLeft;

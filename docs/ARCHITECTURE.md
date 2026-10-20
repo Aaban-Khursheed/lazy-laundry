@@ -85,6 +85,7 @@ files in `tests/worker.test.js`.
 | `POST …/share\|rotate\|revoke` | tracking-token lifecycle (re-encrypts stored token) |
 | `POST /api/operator/penalties/:id/waive` | waive penalty with audit |
 | `GET/POST /api/operator/promotions`, `PATCH …/:id` | promo CRUD + events |
+| `GET/POST /api/operator/blocked-slots`, `DELETE …/:id` | capacity blocks: date or date+slot, `affectedBookings` count on create, active schedule echoed for the UI |
 
 ## Data model (D1)
 
@@ -110,6 +111,12 @@ files in `tests/worker.test.js`.
 - **operator_notes** — private, ≤2000 chars.
 - **promotions + promotion_events** — percent/fixed codes, min spend, max
   redemptions, active window; discount applies to service total only.
+- **blocked_slots** — operator capacity blocks. `pickup_slot` NULL blocks the
+  whole date; partial unique indexes dedupe whole-date and date+slot rows.
+  Checked in `getAvailability`, as a `slotBlockFor` pre-check on customer
+  create/reschedule, and as a `NOT EXISTS` guard inside the booking insert
+  and reschedule update transactions. Blocks never cancel existing bookings;
+  operators bypass them deliberately.
 
 Migrations (`api/migrations/`) are additive and **not undone by rollback**.
 
@@ -122,18 +129,19 @@ Migrations (`api/migrations/`) are additive and **not undone by rollback**.
    (5/min per IP) on top of the general `RATE_LIMITER` (100/min) — the
    write path gets a stricter budget than reads.
 2. Idempotent replay (IETF Idempotency-Key draft semantics): the fingerprint is the SHA-256 of the canonical client-supplied fields only, never server-derived values such as `readyAt` or totals. Same key + same fingerprint → 201 with the stored booking and the re-issued token; same key + different fingerprint → 422 `idempotency_key_reused`.
-3. `PUBLIC_BOOKING_ENABLED` gate (503 when off) → slot window check: KL date within 7 days and pickup at least `BOOKING_LEAD_MINUTES` (default 60) away; the operator may use any slot that has not started.
-4. Per-phone active cap: a phone may hold at most `ACTIVE_BOOKING_LIMIT`
+3. `PUBLIC_BOOKING_ENABLED` gate (503 when off) → slot window check: KL date within 7 days and pickup at least `BOOKING_LEAD_MINUTES` (default 60) away; the operator may use any slot that has not started. The weekly pattern is `PICKUP_SLOTS_WEEKDAY`/`PICKUP_SLOTS_WEEKEND`, exposed via `/api/config`.
+4. Capacity block check (`slotBlockFor`): a `blocked_slots` row for the date — whole-date (`pickup_slot` NULL) or the specific slot — returns 409 `slot_unavailable`. The same predicate rides inside the guarded write (`BLOCKED_SLOT_GUARD_SQL`) for both create and customer reschedule, so a block set mid-race still wins; `changes()=0` re-reads the block to classify the rejection.
+5. Per-phone active cap: a phone may hold at most `ACTIVE_BOOKING_LIMIT`
    (default 2) bookings in `confirmed`/`pickup_on_the_way`/`laundry_picked_up`/
    `processing`/`ready`. A pre-check returns 409 `active_booking_limit`
    early; the same `COUNT(*) < limit` predicate is repeated inside the
    `INSERT … WHERE` so a raced request cannot exceed the cap, and a `changes()=0`
    insert is re-classified by re-reading the count.
-5. One `env.DB.batch`: customer upsert → penalty-balance zero guarded by
-   `changes()=1` → booking `INSERT … WHERE` slot/promo/balance/cap guards → promo
+6. One `env.DB.batch`: customer upsert → penalty-balance zero guarded by
+   `changes()=1` → booking `INSERT … WHERE` slot/promo/balance/cap/block guards → promo
    redemption increment → penalty allocation → status + audit events.
-6. Any unique-constraint violation first re-runs the replay lookup, so an overlapping identical retry that lost the race receives the winner's booking. Only when no booking exists for the key does a `(pickup_date, pickup_slot)` violation return 409 `slot_taken`.
-7. `expectedTotalCents` / `priceRevision` mismatch → 409 `quote_changed` —
+7. Any unique-constraint violation first re-runs the replay lookup, so an overlapping identical retry that lost the race receives the winner's booking. Only when no booking exists for the key does a `(pickup_date, pickup_slot)` violation return 409 `slot_taken`.
+8. `expectedTotalCents` / `priceRevision` mismatch → 409 `quote_changed` —
    the client must re-show the server quote before retrying.
 Error codes: `quote_changed` (409, includes fee-balance changes), `slot_taken` (409), `slot_unavailable` (409), `active_booking_limit` (409), `idempotency_key_reused` (422).
 

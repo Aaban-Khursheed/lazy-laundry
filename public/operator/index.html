@@ -28,6 +28,7 @@
         <nav aria-label="Operator">
           <a class="operator-nav-current" href="#operator-view" data-operator-view="queue" aria-current="page">Booking queue</a>
           <a href="#operator-promos" data-operator-view="promos">Promotions</a>
+          <a href="#operator-capacity" data-operator-view="capacity">Capacity</a>
         </nav>
         <a class="operator-customer-link" href="https://lazylaundry.me/">Customer website <span aria-hidden="true">↗</span></a>
       </aside>
@@ -103,6 +104,28 @@
             <div class="operator-panel-heading"><h2 id="operator-promo-list-title">Codes</h2><button type="button" id="operator-promo-refresh" data-ui="button" data-intent="secondary" data-size="sm">Refresh</button></div>
             <ol class="operator-promo-list" id="operator-promo-list"></ol>
             <div class="operator-empty" id="operator-promo-empty" role="status" hidden><strong>No promotions yet</strong><p>Create a code above — it applies at checkout immediately.</p></div>
+          </section>
+        </section>
+        <section id="operator-capacity" aria-labelledby="operator-capacity-title" hidden>
+          <div class="operator-page-heading"><h1 id="operator-capacity-title">Capacity</h1><span class="operator-snapshot" id="operator-capacity-updated" role="status">Not loaded</span></div>
+          <div class="form-error" id="operator-capacity-error" role="alert" hidden></div>
+          <p class="operator-success" id="operator-capacity-success" role="status" hidden></p>
+          <p class="operator-data-scope">Blocked dates and slots stop new customer bookings immediately — at availability and again inside the booking transaction. Existing bookings on a blocked date are not cancelled; handle them from the queue first.</p>
+
+          <section class="operator-promo-card" data-ui="surface" data-tone="paper" data-padding="md">
+            <div class="operator-panel-heading"><h2>Block a pickup time</h2></div>
+            <form id="operator-capacity-form" class="operator-promo-form">
+              <div class="operator-field"><label for="capacity-date">Pickup date</label><input class="text-input" id="capacity-date" name="pickupDate" type="date" required /></div>
+              <div class="operator-field"><label for="capacity-slot">Pickup slot</label><select class="text-input" id="capacity-slot" name="pickupSlot"><option value="">Whole day</option><option value="10:00">10:00 AM</option><option value="11:00">11:00 AM</option><option value="12:00">12:00 PM</option><option value="19:00">7:00 PM</option><option value="20:00">8:00 PM</option><option value="21:00">9:00 PM</option></select></div>
+              <div class="operator-field"><label for="capacity-reason">Reason (optional)</label><input class="text-input" id="capacity-reason" name="reason" type="text" maxlength="120" autocomplete="off" placeholder="Exams week, travel, equipment…" /></div>
+              <div class="operator-promo-submit"><button type="submit" id="operator-capacity-submit" data-ui="button" data-intent="primary" data-size="md">Block pickup</button></div>
+            </form>
+          </section>
+
+          <section class="operator-promo-card" data-ui="surface" data-tone="paper" data-padding="sm" aria-labelledby="operator-capacity-list-title">
+            <div class="operator-panel-heading"><h2 id="operator-capacity-list-title">Upcoming blocks</h2><button type="button" id="operator-capacity-refresh" data-ui="button" data-intent="secondary" data-size="sm">Refresh</button></div>
+            <ol class="operator-promo-list" id="operator-capacity-list"></ol>
+            <div class="operator-empty" id="operator-capacity-empty" role="status" hidden><strong>No blocked pickups</strong><p>All scheduled dates and slots are open to customers.</p></div>
           </section>
         </section>
         </main>

@@ -160,6 +160,18 @@ Structured `console.error` events worth alerting on / grepping in Logs:
   (`RATE_LIMITER_BOOKING`, 5/min/IP) on top of the general one. Raise the cap
   by changing the var, not the code — it is deliberately a var so a real
   customer who needs a third concurrent booking can be accommodated quickly.
+- **The operator can block a pickup date or a single slot** from the
+  dashboard's Capacity view (`blocked_slots` table; `pickup_slot` NULL blocks
+  the whole date). Blocks hide slots in `/api/availability` (`blockedSlots` /
+  `blockedDate`), reject customer bookings and reschedules with 409
+  `slot_unavailable`, and a `NOT EXISTS` guard inside the booking insert and
+  reschedule update transactions means a block set mid-race still wins.
+  Existing bookings are never cancelled by a block — the create response
+  reports `affectedBookings` so the operator can handle them. Operator-side
+  scheduling is intentionally unaffected. The weekly slot pattern itself is
+  config: `PICKUP_SLOTS_WEEKDAY` / `PICKUP_SLOTS_WEEKEND` (comma-separated
+  `HH:MM`, deployed as vars, served to clients via `/api/config` and the
+  operator block list).
 - **Customer PII is anonymized 24 months after a booking reaches a terminal
   state** (the privacy notice's published window). The `*/15` cron runs
   `runRetentionPass`: name/phone/block/unit become sentinels, audit

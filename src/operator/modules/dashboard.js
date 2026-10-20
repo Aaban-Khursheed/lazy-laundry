@@ -1,10 +1,10 @@
 import { apiRequest } from "../../shared/api.js";
 import { PAYMENT_LABELS, PRICING, SERVICE_LABELS } from "../../shared/constants.js";
-import { clearError, escapeHtml, formatAdminTimestamp, formatDate, formatMoney, formatSlot, getSlotsForDate, isSlotClosed, promoDiscountPreview, showError } from "../../shared/utils.js";
+import { clearError, escapeHtml, formatAdminTimestamp, formatDate, formatMoney, formatSlot, getSlotsForDate, isSlotClosed, promoDiscountPreview, setPickupSchedule, showError } from "../../shared/utils.js";
 import { applyVariants } from "../../shared/variants.js";
 import { getEligibility, renderDetail, renderDetailFailure, renderDetailPlaceholder, renderQueue, summarizeBookings } from "./components.js";
 import { cancelOperatorDialog, requestActionDialog, requestDiscardDialog, requestOperatorDialog } from "./dialogs.js";
-import { assertBooking, exportOperatorBookings, saveOperatorAction, savePromotion } from "./actions.js";
+import { assertBooking, createBlockedSlot, deleteBlockedSlot, exportOperatorBookings, saveOperatorAction, savePromotion } from "./actions.js";
 
 const PAGE_SIZE = 10;
 const DRAWER_TABS = ["overview", "booking", "activity"];
@@ -43,6 +43,9 @@ let searchTimer = null;
 let operatorView = "queue";
 let promos = [];
 let promosLoaded = false;
+let capacityBlocks = [];
+let capacityLoaded = false;
+let capacityBusy = false;
 let promoBusy = false;
 let editingPromo = null;
 
@@ -693,7 +696,7 @@ export function initializeOperator() {
   if (!window.matchMedia("(min-width: 1024px)").matches || !document.querySelector("#operator-view")) return;
   enabled = true;
   if (initialized) return;
-  elements = Object.fromEntries(Object.entries({ list: "operator-booking-list", empty: "operator-empty", emptyDescription: "operator-empty-description", detail: "operator-detail", drawer: "operator-drawer", drawerTabs: "operator-drawer-tabs", backList: "operator-back-list", drawerRefresh: "operator-drawer-refresh", feedback: "operator-feedback", success: "operator-success", filter: "operator-filter", search: "operator-search", date: "operator-date", pending: "operator-pending-count", active: "operator-active-count", unpaid: "operator-unpaid-count", collected: "operator-collected-total", summary: "operator-summary", summaryHelp: "operator-summary-help", refresh: "operator-refresh", export: "operator-export", prev: "operator-prev", next: "operator-next", pageInfo: "operator-page-info", results: "operator-results-count", scope: "operator-data-scope", updated: "operator-last-updated", mobileDraft: "operator-mobile-draft-warning", help: "operator-workspace-help", viewQueue: "operator-queue-view", viewPromos: "operator-promos", promoForm: "operator-promo-form", promoList: "operator-promo-list", promoEmpty: "operator-promo-empty", promoError: "operator-promo-error", promoSuccess: "operator-promo-success", promoSubmit: "operator-promo-submit", promoFormTitle: "operator-promo-form-title", promoCancelEdit: "operator-promo-cancel-edit", promoRefresh: "operator-promo-refresh", promoValueLabel: "promo-value-label", promoUpdated: "operator-promos-updated" }).map(([key, id]) => [key, document.getElementById(id)]));
+  elements = Object.fromEntries(Object.entries({ list: "operator-booking-list", empty: "operator-empty", emptyDescription: "operator-empty-description", detail: "operator-detail", drawer: "operator-drawer", drawerTabs: "operator-drawer-tabs", backList: "operator-back-list", drawerRefresh: "operator-drawer-refresh", feedback: "operator-feedback", success: "operator-success", filter: "operator-filter", search: "operator-search", date: "operator-date", pending: "operator-pending-count", active: "operator-active-count", unpaid: "operator-unpaid-count", collected: "operator-collected-total", summary: "operator-summary", summaryHelp: "operator-summary-help", refresh: "operator-refresh", export: "operator-export", prev: "operator-prev", next: "operator-next", pageInfo: "operator-page-info", results: "operator-results-count", scope: "operator-data-scope", updated: "operator-last-updated", mobileDraft: "operator-mobile-draft-warning", help: "operator-workspace-help", viewQueue: "operator-queue-view", viewPromos: "operator-promos", promoForm: "operator-promo-form", promoList: "operator-promo-list", promoEmpty: "operator-promo-empty", promoError: "operator-promo-error", promoSuccess: "operator-promo-success", promoSubmit: "operator-promo-submit", promoFormTitle: "operator-promo-form-title", promoCancelEdit: "operator-promo-cancel-edit", promoRefresh: "operator-promo-refresh", promoValueLabel: "promo-value-label", promoUpdated: "operator-promos-updated", viewCapacity: "operator-capacity", capacityForm: "operator-capacity-form", capacityList: "operator-capacity-list", capacityEmpty: "operator-capacity-empty", capacityError: "operator-capacity-error", capacitySuccess: "operator-capacity-success", capacitySubmit: "operator-capacity-submit", capacityRefresh: "operator-capacity-refresh", capacityUpdated: "operator-capacity-updated" }).map(([key, id]) => [key, document.getElementById(id)]));
   if (Object.values(elements).some((element) => !element)) { enabled = false; elements = null; return; }
   initialized = true;
   elements.filter.addEventListener("change", () => changeView(inputFilters()));
@@ -813,6 +816,17 @@ export function initializeOperator() {
     clearPromoFeedback();
     loadPromotions();
   });
+  elements.capacityForm.pickupDate.addEventListener("change", syncCapacitySlotOptions);
+  elements.capacityForm.addEventListener("submit", submitCapacityForm);
+  elements.capacityRefresh.addEventListener("click", () => {
+    if (capacityBusy) return;
+    clearCapacityFeedback();
+    loadCapacity();
+  });
+  elements.capacityList.addEventListener("click", async (event) => {
+    const remove = event.target.closest("[data-capacity-delete]");
+    if (remove) await removeCapacityBlock(remove.dataset.capacityDelete);
+  });
   elements.promoList.addEventListener("click", async (event) => {
     const edit = event.target.closest("[data-promo-edit]");
     const toggle = event.target.closest("[data-promo-toggle]");
@@ -855,10 +869,162 @@ function toDateTimeLocal(iso) {
   return new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Kuala_Lumpur", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(date).replace(" ", "T");
 }
 
+function clearCapacityFeedback() {
+  elements.capacityError.hidden = true;
+  elements.capacityError.textContent = "";
+  elements.capacitySuccess.hidden = true;
+  elements.capacitySuccess.textContent = "";
+}
+
+function updateCapacityControls() {
+  elements.capacitySubmit.disabled = capacityBusy;
+  elements.capacityRefresh.disabled = capacityBusy;
+}
+
+async function fetchCapacityBlocks() {
+  const result = await apiRequest("/api/operator/blocked-slots", { method: "GET", credentials: "include" });
+  if (!Array.isArray(result?.blocks)) throw new Error("The operator API returned an invalid capacity response.");
+  setPickupSchedule(result.weekdaySlots, result.weekendSlots);
+  syncCapacitySlotOptions();
+  capacityBlocks = result.blocks;
+  capacityLoaded = true;
+  renderCapacity();
+  elements.capacityUpdated.textContent = `Updated ${new Date().toLocaleTimeString("en-MY", { hour: "numeric", minute: "2-digit" })}`;
+}
+
+async function loadCapacity() {
+  if (!desktopAvailable() || capacityBusy) return;
+  capacityBusy = true;
+  updateCapacityControls();
+  clearError(elements.capacityError);
+  elements.capacityError.hidden = true;
+  try {
+    await fetchCapacityBlocks();
+  } catch (error) {
+    if (error.name !== "AbortError") showError(elements.capacityError, error.message || "Blocked pickups could not be loaded.");
+  } finally {
+    capacityBusy = false;
+    updateCapacityControls();
+  }
+}
+
+function syncCapacitySlotOptions() {
+  const select = elements.capacityForm.pickupSlot;
+  const date = elements.capacityForm.pickupDate.value;
+  const current = select.value;
+  select.innerHTML = "";
+  const wholeDay = document.createElement("option");
+  wholeDay.value = "";
+  wholeDay.textContent = "Whole day";
+  select.appendChild(wholeDay);
+  if (date) {
+    for (const slot of getSlotsForDate(date)) {
+      const option = document.createElement("option");
+      option.value = slot;
+      option.textContent = formatSlot(slot);
+      select.appendChild(option);
+    }
+  }
+  select.value = [...select.options].some((option) => option.value === current) ? current : "";
+}
+
+function renderCapacity() {
+  elements.capacityList.innerHTML = "";
+  elements.capacityEmpty.hidden = capacityBlocks.length > 0;
+  for (const block of capacityBlocks) {
+    const item = document.createElement("li");
+    item.className = "operator-promo-item";
+    item.innerHTML = `
+      <div class="operator-promo-item-main">
+        <strong class="operator-promo-code">${escapeHtml(formatDate(block.pickupDate))}</strong>
+        <span data-ui="badge" data-tone="neutral">${block.pickupSlot ? escapeHtml(formatSlot(block.pickupSlot)) : "Whole day"}</span>
+      </div>
+      <p class="operator-promo-meta">${block.reason ? escapeHtml(block.reason) : "No reason recorded"}</p>
+      <div class="operator-promo-actions">
+        <button type="button" data-ui="button" data-intent="danger" data-size="sm" data-capacity-delete="${escapeHtml(block.id)}">Remove</button>
+      </div>`;
+    elements.capacityList.appendChild(item);
+  }
+}
+
+async function submitCapacityForm(event) {
+  event.preventDefault();
+  if (!desktopAvailable() || capacityBusy) return;
+  const form = elements.capacityForm;
+  if (!form.reportValidity()) return;
+  const fields = {
+    pickupDate: form.pickupDate.value,
+    pickupSlot: form.pickupSlot.value || null,
+    reason: form.reason.value.trim(),
+  };
+  const label = fields.pickupSlot ? `${formatDate(fields.pickupDate)} ${formatSlot(fields.pickupSlot)}` : `${formatDate(fields.pickupDate)} (whole day)`;
+  const confirm = await requestOperatorDialog({
+    title: `Block ${label}?`,
+    description: "New customer bookings for this pickup stop immediately — hidden at availability and rejected inside the booking transaction. Existing bookings are not cancelled.",
+    submit: "Block pickup",
+    context: fields.reason || "No reason recorded",
+    eyebrow: "Capacity",
+  });
+  if (confirm === null) return;
+  capacityBusy = true;
+  updateCapacityControls();
+  clearCapacityFeedback();
+  try {
+    const result = await createBlockedSlot(fields);
+    elements.capacitySuccess.hidden = false;
+    const affected = Number(result.affectedBookings) || 0;
+    elements.capacitySuccess.textContent = `${label} blocked for new bookings.${affected > 0 ? ` ${affected} active booking${affected === 1 ? "" : "s"} on this pickup still need${affected === 1 ? "s" : ""} handling — the block does not cancel them.` : ""}`;
+    form.reset();
+    syncCapacitySlotOptions();
+    try {
+      await fetchCapacityBlocks();
+    } catch {
+      capacityBlocks = [];
+      capacityLoaded = false;
+      renderCapacity();
+      showError(elements.capacityError, "The block was saved but the list could not refresh — use Refresh to reload it.");
+    }
+  } catch (error) {
+    showError(elements.capacityError, error.message || "The pickup could not be blocked.");
+  } finally {
+    capacityBusy = false;
+    updateCapacityControls();
+  }
+}
+
+async function removeCapacityBlock(id) {
+  const block = capacityBlocks.find((entry) => entry.id === id);
+  if (!block || !desktopAvailable() || capacityBusy) return;
+  const label = block.pickupSlot ? `${formatDate(block.pickupDate)} ${formatSlot(block.pickupSlot)}` : `${formatDate(block.pickupDate)} (whole day)`;
+  const confirm = await requestOperatorDialog({
+    title: `Reopen ${label}?`,
+    description: "New customer bookings can take this pickup again as soon as the block is removed.",
+    submit: "Remove block",
+    eyebrow: "Capacity",
+  });
+  if (confirm === null) return;
+  capacityBusy = true;
+  updateCapacityControls();
+  clearCapacityFeedback();
+  try {
+    await deleteBlockedSlot(id);
+    elements.capacitySuccess.hidden = false;
+    elements.capacitySuccess.textContent = `${label} is open for bookings again.`;
+    capacityBlocks = capacityBlocks.filter((entry) => entry.id !== id);
+    renderCapacity();
+  } catch (error) {
+    showError(elements.capacityError, error.message || "The block could not be removed.");
+  } finally {
+    capacityBusy = false;
+    updateCapacityControls();
+  }
+}
+
 function switchOperatorView(name) {
-  operatorView = name === "promos" ? "promos" : "queue";
+  operatorView = ["promos", "capacity"].includes(name) ? name : "queue";
   elements.viewQueue.hidden = operatorView !== "queue";
   elements.viewPromos.hidden = operatorView !== "promos";
+  elements.viewCapacity.hidden = operatorView !== "capacity";
   document.querySelectorAll("[data-operator-view]").forEach((link) => {
     const current = link.dataset.operatorView === operatorView;
     link.classList.toggle("operator-nav-current", current);
@@ -866,6 +1032,7 @@ function switchOperatorView(name) {
     else link.removeAttribute("aria-current");
   });
   if (operatorView === "promos" && !promosLoaded && !promoBusy) loadPromotions();
+  if (operatorView === "capacity" && !capacityLoaded && !capacityBusy) loadCapacity();
 }
 
 function clearPromoFeedback() {

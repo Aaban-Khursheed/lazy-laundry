@@ -28,10 +28,18 @@ export function isWeekend(dateString) {
   return day === 0 || day === 6;
 }
 
+let weekdaySlots = ["19:00", "20:00", "21:00"];
+let weekendSlots = ["10:00", "11:00", "12:00", "19:00", "20:00", "21:00"];
+
+export function setPickupSchedule(weekday, weekend) {
+  const valid = (list) => Array.isArray(list) && list.length > 0 && list.length <= 12
+    && list.every((slot) => /^([01]\d|2[0-3]):[0-5]\d$/.test(slot));
+  if (valid(weekday)) weekdaySlots = [...weekday].sort();
+  if (valid(weekend)) weekendSlots = [...weekend].sort();
+}
+
 export function getSlotsForDate(dateString) {
-  const slots = ["19:00", "20:00", "21:00"];
-  if (isWeekend(dateString)) slots.unshift("10:00", "11:00", "12:00");
-  return slots;
+  return isWeekend(dateString) ? [...weekendSlots] : [...weekdaySlots];
 }
 
 export function isSlotInCurrentSchedule(dateString, slot) {

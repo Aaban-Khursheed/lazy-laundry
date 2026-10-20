@@ -33,7 +33,9 @@
     "OPERATOR_HOST": "ops.lazylaundry.me",
     "OPERATOR_ALLOWED_EMAILS": "25087560@imail.sunway.edu.my",
     "OPERATOR_ALERT_EMAIL": "25087560@imail.sunway.edu.my",
-    "SERVICE_TIMEZONE": "Asia/Kuala_Lumpur"
+    "SERVICE_TIMEZONE": "Asia/Kuala_Lumpur",
+    "PICKUP_SLOTS_WEEKDAY": "19:00,20:00,21:00",
+    "PICKUP_SLOTS_WEEKEND": "10:00,11:00,12:00,19:00,20:00,21:00"
   },
   "workers_dev": true,
   "routes": [
@@ -83,7 +85,9 @@
         "OPERATOR_ALLOWED_EMAILS": "local.operator@example.invalid",
         "OPERATOR_ALERT_EMAIL": "local.operator@example.invalid",
         "SERVICE_TIMEZONE": "Asia/Kuala_Lumpur",
-        "LOCAL_OPERATOR_EMAIL": "local.operator@example.invalid"
+        "LOCAL_OPERATOR_EMAIL": "local.operator@example.invalid",
+        "PICKUP_SLOTS_WEEKDAY": "19:00,20:00,21:00",
+        "PICKUP_SLOTS_WEEKEND": "10:00,11:00,12:00,19:00,20:00,21:00"
       },
       "d1_databases": [
         {

@@ -31,6 +31,11 @@ function fakeDB() {
         }
         return { n: activeCountFor(params[0]) };
       }
+      if (sql.includes("FROM blocked_slots")) {
+        return db.blocked.find(
+          (row) => row.pickup_date === params[0] && (row.pickup_slot === null || row.pickup_slot === params[1]),
+        ) ?? null;
+      }
       if (sql.includes("FROM customers WHERE id = ?")) return null;
       if (sql.includes("SELECT * FROM bookings WHERE id = ?")) return byId.get(params[0]) ?? null;
       throw new Error(`Unexpected first(): ${sql}`);
@@ -42,6 +47,7 @@ function fakeDB() {
   const db = {
     hiddenLookups: 0,
     frozenCount: null,
+    blocked: [],
     byId,
     prepare: (sql) => statement(sql),
     async batch(statements) {
@@ -51,9 +57,12 @@ function fakeDB() {
         throw new Error("D1_ERROR: UNIQUE constraint failed: bookings.pickup_date, bookings.pickup_slot: SQLITE_CONSTRAINT");
       }
       if (byKey.has(p[4])) throw new Error("UNIQUE constraint failed: bookings.idempotency_key_hash");
-      // The last two insert binds are the in-transaction cap (phone, limit).
-      const capBlocked = activeCountFor(p[p.length - 2]) >= p[p.length - 1];
-      if (!capBlocked) {
+      // Trailing insert binds: phone, limit (cap guard), then date, slot (block guard).
+      const capBlocked = activeCountFor(p[p.length - 4]) >= p[p.length - 3];
+      const slotBlocked = db.blocked.some(
+        (row) => row.pickup_date === p[p.length - 2] && (row.pickup_slot === null || row.pickup_slot === p[p.length - 1]),
+      );
+      if (!capBlocked && !slotBlocked) {
         const row = {
           id: p[0], booking_number: p[1], tracking_token_hash: p[2], encrypted_tracking_token: p[3],
           idempotency_key_hash: p[4], request_payload_hash: p[5], customer_id: p[6], customer_name: p[7],
@@ -65,7 +74,7 @@ function fakeDB() {
         byKey.set(row.idempotency_key_hash, row);
         byId.set(row.id, row);
       }
-      return statements.map((s) => ({ meta: { changes: s === insert && capBlocked ? 0 : 1 } }));
+      return statements.map((s) => ({ meta: { changes: s === insert && (capBlocked || slotBlocked) ? 0 : 1 } }));
     },
   };
   return db;

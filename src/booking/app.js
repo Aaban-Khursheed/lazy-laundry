@@ -1,6 +1,6 @@
 import { applyVariants } from "../shared/variants.js";
 import { apiRequest } from "../shared/api.js";
-import { getBookingLeadMinutes, setBookingLeadMinutes } from "../shared/utils.js";
+import { getBookingLeadMinutes, setBookingLeadMinutes, setPickupSchedule } from "../shared/utils.js";
 import { initializeBooking, isBookingLocked, refreshBookingWindow, resetBookingForm, setBookingEnabled } from "./modules/booking.js";
 import {
   initializeTracking,
@@ -54,6 +54,7 @@ async function applyPublicConfig() {
     bookingEnabled = config.bookingEnabled;
     setBookingEnabled(bookingEnabled);
     if (setBookingLeadMinutes(config.bookingLeadMinutes)) refreshBookingWindow();
+    setPickupSchedule(config.weekdaySlots, config.weekendSlots);
     const leadHint = document.querySelector("#slot-lead-hint");
     const lead = getBookingLeadMinutes();
     leadHint.textContent = `Book at least ${lead} min before pickup`;
