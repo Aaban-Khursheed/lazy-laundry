@@ -6,24 +6,35 @@ disagree, the source wins — update this file.
 ## System context
 
 ```
-                         lazylaundry.me / www.lazylaundry.me
-                                    │
-            ┌───────────────────────┼────────────────────────┐
-            │                       │                        │
-   Customer browser          Customer browser          Operator browser
-   (booking + tracking)      (booking + tracking)      (ops.lazylaundry.me)
-            │                       │                        │
-            └───────────────────────┼────────────────────────┘
-                                    │  HTTPS, same-origin only
-                    ┌───────────────▼───────────────┐
-                    │   Cloudflare Worker           │
-                    │   api/worker.js               │
-                    │   host role → asset or API    │
-                    └───┬───────────┬───────────┬───┘
-                        │           │           │
-                 Workers Assets     D1      Turnstile siteverify
-                 (public/,          (SQLite)  Cloudflare Access
-                 per-role prefix)             certs (ops JWT)
+ lazylaundry.me / www.lazylaundry.me              ops.lazylaundry.me
+        customer browser (mobile)                     operator browser
+        /  /track  /legal/*                           /  (desktop ≥1024px)
+                   │                                          │
+                   └──────────────────┬───────────────────────┘
+                                      ▼
+              ┌── Cloudflare edge ─────────────────────────────┐
+              │ Access JWT gate (ops only) · Turnstile          │
+              │ siteverify (customer POSTs) · RATE_LIMITER      │
+              │ 100/min + RATE_LIMITER_BOOKING 5/min · cron     │
+              │ */15 * * * *                                    │
+              └───────────────────────┬─────────────────────────┘
+                                      ▼
+              api/worker.js — hostRole → CORS/origin gate →
+              rate limit → customer API | operator API | ASSETS
+              ┌───────────┬─────────────────┬───────────────────┐
+              ▼           ▼                 ▼                   ▼
+          ASSETS      D1 lazylaundry-db   EMAIL send_email    vars/secrets
+          public/     bookings·customers·  (pinned operator   Turnstile
+          role-       booking_events·      dest, waitUntil,   secret,
+          prefixed    booking_audit_       one retry)         tracking key,
+          assets      events·penalty_                         Access JWKS
+                      events·operator_                        vars
+                      notes·promotions·
+                      blocked_slots·
+                      capacity_events
+                          ▲ cron */15 runs pickup reminders
+                          (≤90min confirmed) + retention
+                          anonymizer (24mo PII, batched)
 ```
 
 One Worker serves everything. There is no separate frontend host, API service,
