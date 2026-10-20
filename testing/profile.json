@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "project": "lazy-laundry",
+  "adapter": "cloudflare-workers-d1",
+  "runtime": {
+    "node": "24.15.0",
+    "wrangler": "4.151.2",
+    "compatibilityDate": "2026-10-01"
+  },
+  "commands": {
+    "integrationHealth": "npm run test:infra",
+    "browserHealth": "npm run test:e2e:infra"
+  },
+  "isolation": {
+    "strategy": "wrangler-test-harness",
+    "persistence": false,
+    "migrations": "api/migrations"
+  },
+  "http": {
+    "customerHost": "127.0.0.1",
+    "operatorHost": "ops.localhost",
+    "ports": "allocate-and-record",
+    "leaveExistingDevPortUntouched": 8787
+  },
+  "safety": {
+    "productionTargets": false,
+    "externalHttp": "deny-by-default",
+    "realEmailBinding": false,
+    "maxLocalRunners": 2
+  },
+  "artifacts": "test-results/infra/<run-id>"
+}

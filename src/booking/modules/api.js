@@ -1,1 +1,1 @@
-export { API_BASE_URL, API_MODE, apiRequest } from "../../shared/api.js";
+export { API_BASE_URL, apiRequest } from "../../shared/api.js";

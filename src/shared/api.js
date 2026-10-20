@@ -1,7 +1,6 @@
 const configuredBase = document.querySelector('meta[name="lazy-laundry-api-base"]')?.content.trim() || window.location.origin;
 
 export const API_BASE_URL = configuredBase.replace(/\/+$/, "");
-export const API_MODE = true;
 
 export async function apiRequest(path, { credentials = "same-origin", timeoutMs = 15000, readOnly = false, signal, ...options } = {}) {
   const endpoint = new URL(String(path).replace(/^\/+/, ""), `${API_BASE_URL}/`);

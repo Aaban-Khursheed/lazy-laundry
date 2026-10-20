@@ -1,3 +1,5 @@
+import { PRICE_CENTS } from "../src/shared/constants.js";
+
 const STATUS_CODES = [
   "confirmed",
   "pickup_on_the_way",
@@ -130,8 +132,19 @@ function getCorsHeaders(request, env) {
     env.CUSTOMER_ORIGIN,
     env.OPERATOR_ORIGIN,
     ...hosts.map((host) => `https://${host}`),
-    ...(env.ENVIRONMENT === "local" ? ["http://localhost:8787", "http://127.0.0.1:8787", "http://ops.localhost:8787"] : []),
   ].filter(Boolean));
+  if (env.ENVIRONMENT === "local") {
+    // Local dev may run on any loopback port; mutations are still gated by
+    // the strict Origin === request-origin check in mutationRequestError.
+    try {
+      const url = new URL(origin);
+      if (url.protocol === "http:" && ["localhost", "127.0.0.1", "ops.localhost"].includes(url.hostname)) {
+        allowedOrigins.add(origin);
+      }
+    } catch {
+      return null;
+    }
+  }
   if (!allowedOrigins.has(origin)) return null;
   return {
     "Access-Control-Allow-Origin": origin,
@@ -298,14 +311,14 @@ function activeBookingLimit(env) {
 async function slotBlockFor(env, dateString, slot) {
   if (!env?.DB?.prepare) return null;
   return await env.DB.prepare(
-    "SELECT id, reason FROM blocked_slots WHERE pickup_date = ? AND (pickup_slot IS NULL OR pickup_slot = ?)",
+    "SELECT id, reason FROM blocked_slots WHERE pickup_date = ? AND (pickup_slot IS NULL OR pickup_slot = ?) AND removed_at IS NULL",
   ).bind(dateString, slot).first();
 }
 
 const BLOCKED_SLOT_GUARD_SQL = `
       AND NOT EXISTS (
         SELECT 1 FROM blocked_slots
-        WHERE pickup_date = ? AND (pickup_slot IS NULL OR pickup_slot = ?)
+        WHERE pickup_date = ? AND (pickup_slot IS NULL OR pickup_slot = ?) AND removed_at IS NULL
       )`;
 
 function isPickupSlotAvailable(dateString, slot, leadMinutes = DEFAULT_BOOKING_LEAD_MINUTES, schedule) {
@@ -556,9 +569,8 @@ async function runRetentionPass(env, now = Date.now()) {
 }
 
 function priceInCents(packageSize, service, hangers) {
-  const base = packageSize === 10 ? 2999 : 5499;
-  const express = packageSize === 10 ? 1000 : 1500;
-  return base + (service === "express" ? express : 0) + (hangers ? 0 : 0);
+  const tier = PRICE_CENTS[packageSize] || PRICE_CENTS[18];
+  return tier.base + (service === "express" ? tier.express : 0) + (hangers ? tier.hanger : 0);
 }
 
 const PROMO_CODE_PATTERN = /^[A-Z0-9]{3,32}$/;
@@ -625,7 +637,7 @@ function promoFromRow(row) {
 
 const BOOKING_FIELDS = new Set(["name", "phone", "block", "unit", "packageSize", "service", "hangers", "pickupDate", "pickupSlot", "paymentMethod", "promoCode", "termsAccepted", "priceRevision", "expectedTotalCents"]);
 
-function validateBooking(input, env) {
+function validateBooking(input) {
   if (!input || typeof input !== "object" || Array.isArray(input)) return null;
   if (Object.keys(input).some((key) => !BOOKING_FIELDS.has(key))) return null;
   const name = typeof input.name === "string" ? input.name.trim() : "";
@@ -646,7 +658,7 @@ function validateBooking(input, env) {
   if (!UNIT_PREFIXES[block]?.includes(unitPrefix)) return null;
   if (![10, 18].includes(packageSize) || !["standard", "express"].includes(service)) return null;
   if (!["cash", "qr"].includes(paymentMethod) || input.termsAccepted !== true) return null;
-  if (!isValidDate(pickupDate) || !isScheduledSlot(pickupDate, pickupSlot, scheduleFor(env))) return null;
+  if (!isValidDate(pickupDate) || typeof pickupSlot !== "string" || !/^([01]\d|2[0-3]):[0-5]\d$/.test(pickupSlot)) return null;
   const priceRevision = input.priceRevision === undefined ? "" : typeof input.priceRevision === "string" && input.priceRevision.length <= 80 ? input.priceRevision : null;
   const expectedTotalCents = input.expectedTotalCents === undefined ? null : Number.isInteger(input.expectedTotalCents) && input.expectedTotalCents >= 0 ? input.expectedTotalCents : null;
   if (priceRevision === null || expectedTotalCents === null && input.expectedTotalCents !== undefined) return null;
@@ -810,7 +822,7 @@ async function createBooking(request, env, cors, ctx) {
     return jsonResponse({ error: "A retry key is required" }, 400, cors);
   }
   const input = await readJson(request);
-  const booking = validateBooking(input, env);
+  const booking = validateBooking(input);
   if (!booking) {
     return jsonResponse({ error: "Booking details are invalid or the pickup slot is unavailable" }, 400, cors);
   }
@@ -870,9 +882,6 @@ async function createBooking(request, env, cors, ctx) {
       ON CONFLICT(phone_e164) DO UPDATE SET updated_at = excluded.updated_at
     `).bind(customerId, booking.phone, feeTotalCents, createdAt, createdAt),
   ];
-  if (feeTotalCents > 0) {
-    statements.push(env.DB.prepare("UPDATE customers SET penalty_balance_cents = 0, updated_at = ? WHERE id = ? AND penalty_balance_cents = ? AND penalty_balance_cents > 0").bind(createdAt, customerId, feeTotalCents));
-  }
   const bookingStatement = env.DB.prepare(`
     INSERT INTO bookings (
       id, booking_number, tracking_token_hash, encrypted_tracking_token, tracking_token_key_version,
@@ -882,7 +891,7 @@ async function createBooking(request, env, cors, ctx) {
       status, ready_at, revision, terms_accepted, terms_accepted_at, terms_policy_version, created_at, updated_at
     )
     SELECT ?, ?, ?, ?, 'v1', ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, 1, 1, ?, ?, ?, ?
-    WHERE (? = 0 OR changes() = 1)
+    WHERE EXISTS (SELECT 1 FROM customers WHERE id = ? AND penalty_balance_cents = ?)
       AND (? IS NULL OR EXISTS (
         SELECT 1 FROM promotions WHERE code = ? AND active = 1
           AND (max_redemptions IS NULL OR redemptions < max_redemptions)
@@ -894,22 +903,33 @@ async function createBooking(request, env, cors, ctx) {
     booking.hangers ? 1 : 0, booking.pickupDate, booking.pickupSlot, booking.serviceTotalCents,
     feeTotalCents, totalCents, booking.paymentMethod, appliedPromo?.code || null, discountCents,
     booking.readyAt, createdAt, env.TERMS_POLICY_VERSION || "launch-v1", createdAt, createdAt,
-    feeTotalCents, appliedPromo?.code || null, appliedPromo?.code || null, booking.phone, activeLimit,
+    customerId, feeTotalCents, appliedPromo?.code || null, appliedPromo?.code || null, booking.phone, activeLimit,
     booking.pickupDate, booking.pickupSlot
   );
   statements.push(bookingStatement);
   const bookingResultIndex = statements.length - 1;
+  if (feeTotalCents > 0) {
+    statements.push(env.DB.prepare(`
+      UPDATE customers SET penalty_balance_cents = 0, updated_at = ?
+      WHERE id = ? AND penalty_balance_cents = ? AND penalty_balance_cents > 0
+        AND EXISTS (SELECT 1 FROM bookings WHERE id = ?)
+    `).bind(createdAt, customerId, feeTotalCents, id));
+  }
+  let promoResultIndex = -1;
   if (appliedPromo) {
+    promoResultIndex = statements.length;
     statements.push(env.DB.prepare(`
       UPDATE promotions SET redemptions = redemptions + 1, updated_at = ?
       WHERE code = ? AND active = 1 AND (max_redemptions IS NULL OR redemptions < max_redemptions)
-    `).bind(createdAt, appliedPromo.code));
+        AND EXISTS (SELECT 1 FROM bookings WHERE id = ?)
+    `).bind(createdAt, appliedPromo.code, id));
   }
   if (feeTotalCents > 0) {
     statements.push(env.DB.prepare(`
       UPDATE penalty_events SET state = 'allocated', allocated_booking_id = ?, updated_at = ?
-      WHERE customer_id = ? AND state = 'outstanding' AND changes() = 1
-    `).bind(id, createdAt, customerId));
+      WHERE customer_id = ? AND state = 'outstanding'
+        AND EXISTS (SELECT 1 FROM bookings WHERE id = ?)
+    `).bind(id, createdAt, customerId, id));
   }
   statements.push(env.DB.prepare(`
     INSERT INTO booking_events (id, booking_id, event_type, from_value, to_value, actor_id, created_at)
@@ -925,8 +945,8 @@ async function createBooking(request, env, cors, ctx) {
     const results = await env.DB.batch(statements);
     const bookingResult = results[bookingResultIndex];
     if (bookingResult?.meta?.changes !== 1) {
-      if (appliedPromo) return jsonResponse({ error: "That promo code is no longer available", code: "quote_changed" }, 409, cors);
-      if (feeTotalCents > 0) return jsonResponse({ error: "The fee balance changed; refresh checkout and try again", code: "quote_changed" }, 409, cors);
+      const retry = await replayIdempotentBooking(env, keyHash, payloadHash, cors);
+      if (retry) return retry;
       if (await slotBlockFor(env, booking.pickupDate, booking.pickupSlot)) {
         return jsonResponse({ error: "The pickup slot is no longer available", code: "slot_unavailable" }, 409, cors);
       }
@@ -939,9 +959,19 @@ async function createBooking(request, env, cors, ctx) {
           code: "active_booking_limit",
         }, 409, cors);
       }
+      const currentCustomer = await env.DB.prepare("SELECT penalty_balance_cents FROM customers WHERE id = ?").bind(customerId).first();
+      if ((Number(currentCustomer?.penalty_balance_cents) || 0) !== feeTotalCents) {
+        return jsonResponse({ error: "The fee balance changed; refresh checkout and try again", code: "quote_changed" }, 409, cors);
+      }
+      if (appliedPromo) {
+        const currentPromo = await promoForCode(env, appliedPromo.code);
+        if (!currentPromo || promoEligibility(currentPromo, booking.serviceTotalCents, { forRedemption: true })) {
+          return jsonResponse({ error: "That promo code is no longer available", code: "quote_changed" }, 409, cors);
+        }
+      }
       throw new Error("Booking insert did not change a row");
     }
-    if (appliedPromo && results[bookingResultIndex + 1]?.meta?.changes !== 1) {
+    if (promoResultIndex >= 0 && results[promoResultIndex]?.meta?.changes !== 1) {
       console.error(JSON.stringify({ event: "promo_redemption_guard_mismatch", bookingId: id, code: appliedPromo.code }));
     }
     const row = await env.DB.prepare("SELECT * FROM bookings WHERE id = ?").bind(id).first();
@@ -1030,7 +1060,7 @@ async function getAvailability(request, env, cors) {
       SELECT pickup_slot FROM bookings WHERE pickup_date = ? AND status <> 'cancelled'
     `).bind(date).all(),
     env.DB.prepare(`
-      SELECT pickup_slot, reason FROM blocked_slots WHERE pickup_date = ?
+      SELECT pickup_slot FROM blocked_slots WHERE pickup_date = ? AND removed_at IS NULL
     `).bind(date).all(),
   ]);
   const blockedRows = blocks?.results || [];
@@ -1572,6 +1602,8 @@ async function getOperatorBookings(request, env, cors) {
       collected: Number(summary?.collected_cents) / 100 || 0,
     },
     page: { offset, limit, total, hasMore: offset + result.results.length < total && offset + limit < total },
+    weekdaySlots: scheduleFor(env).weekday,
+    weekendSlots: scheduleFor(env).weekend,
   }, 200, cors, { operator: true });
 }
 
@@ -2285,17 +2317,42 @@ function blockedSlotForClient(row) {
     pickupDate: row.pickup_date,
     pickupSlot: row.pickup_slot,
     reason: row.reason || "",
+    createdBy: row.created_by ?? null,
     createdAt: row.created_at,
+    revision: row.revision,
+    affectedBookings: Number.isSafeInteger(Number(row.affected_bookings)) ? Math.max(0, Number(row.affected_bookings)) : 0,
   };
 }
 
-async function getOperatorBlockedSlots(env, cors) {
+function capacityPagination(request) {
+  const url = new URL(request.url);
+  const limitValue = url.searchParams.get("limit");
+  const offsetValue = url.searchParams.get("offset");
+  const limit = limitValue === null ? 100 : Number(limitValue);
+  const offset = offsetValue === null ? 0 : Number(offsetValue);
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100
+    || !Number.isSafeInteger(offset) || offset < 0 || offset > 1000000) return null;
+  return { limit, offset };
+}
+
+async function getOperatorBlockedSlots(request, env, cors) {
+  const page = capacityPagination(request);
+  if (!page) return jsonResponse({ error: "Invalid capacity pagination" }, 400, cors, { operator: true });
   const result = await env.DB.prepare(`
-    SELECT id, pickup_date, pickup_slot, reason, created_at FROM blocked_slots
-    WHERE pickup_date >= ? ORDER BY pickup_date, pickup_slot
-  `).bind(dateInKualaLumpur()).all();
+    SELECT id, pickup_date, pickup_slot, reason, created_by, created_at, revision,
+      (SELECT COUNT(*) FROM bookings
+        WHERE bookings.pickup_date = blocked_slots.pickup_date
+          AND bookings.status NOT IN ('cancelled', 'delivered')
+          AND (blocked_slots.pickup_slot IS NULL OR bookings.pickup_slot = blocked_slots.pickup_slot)
+      ) AS affected_bookings
+    FROM blocked_slots
+    WHERE removed_at IS NULL AND pickup_date >= ?
+    ORDER BY pickup_date, coalesce(pickup_slot, ''), id LIMIT ? OFFSET ?
+  `).bind(dateInKualaLumpur(), page.limit + 1, page.offset).all();
+  const rows = result?.results || [];
   return jsonResponse({
-    blocks: (result?.results || []).map(blockedSlotForClient),
+    blocks: rows.slice(0, page.limit).map(blockedSlotForClient),
+    page: { ...page, hasMore: rows.length > page.limit },
     weekdaySlots: scheduleFor(env).weekday,
     weekendSlots: scheduleFor(env).weekend,
   }, 200, cors);
@@ -2303,27 +2360,57 @@ async function getOperatorBlockedSlots(env, cors) {
 
 async function createOperatorBlockedSlot(request, env, actor, cors) {
   const input = await readJson(request);
-  const pickupDate = typeof input?.pickupDate === "string" ? input.pickupDate : "";
-  const pickupSlot = typeof input?.pickupSlot === "string" ? input.pickupSlot : null;
-  const reason = typeof input?.reason === "string" ? input.reason.trim().slice(0, 120) : "";
-  if (!isValidDate(pickupDate) || pickupDate < dateInKualaLumpur()) {
+  const allowed = new Set(["pickupDate", "pickupSlot", "reason"]);
+  if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).some((key) => !allowed.has(key))) {
+    return jsonResponse({ error: "Invalid capacity block" }, 400, cors);
+  }
+  const pickupDate = typeof input.pickupDate === "string" ? input.pickupDate : "";
+  const pickupSlot = input.pickupSlot === undefined || input.pickupSlot === null
+    ? null
+    : typeof input.pickupSlot === "string" ? input.pickupSlot : undefined;
+  const reasonValue = input.reason === undefined ? "" : input.reason;
+  if (pickupSlot === undefined || typeof reasonValue !== "string") {
+    return jsonResponse({ error: "Invalid capacity block" }, 400, cors);
+  }
+  const reason = reasonValue.trim();
+  if (reason.length > 120) return jsonResponse({ error: "Reason must be 120 characters or fewer" }, 400, cors);
+  const today = dateInKualaLumpur();
+  const schedule = scheduleFor(env);
+  if (!isValidDate(pickupDate) || pickupDate < today) {
     return jsonResponse({ error: "A valid future pickup date is required" }, 400, cors);
   }
-  if (pickupSlot !== null && !isScheduledSlot(pickupDate, pickupSlot, scheduleFor(env))) {
+  if (pickupSlot !== null && !isScheduledSlot(pickupDate, pickupSlot, schedule)) {
     return jsonResponse({ error: "That slot is not part of the pickup schedule" }, 400, cors);
   }
-  const affected = await env.DB.prepare(`
-    SELECT COUNT(*) AS n FROM bookings
-    WHERE pickup_date = ? AND status NOT IN ('cancelled', 'delivered')
-      AND (? IS NULL OR pickup_slot = ?)
-  `).bind(pickupDate, pickupSlot, pickupSlot).first();
+  if (pickupDate === today) {
+    const weekday = new Date(`${pickupDate}T12:00:00+08:00`).getUTCDay();
+    const daySlots = weekday === 0 || weekday === 6 ? schedule.weekend : schedule.weekday;
+    const hasUnstartedSlot = daySlots.some((slot) => Date.now() < pickupStartAt(pickupDate, slot));
+    if (pickupSlot !== null && Date.now() >= pickupStartAt(pickupDate, pickupSlot) || pickupSlot === null && !hasUnstartedSlot) {
+      return jsonResponse({ error: "A pickup block must be scheduled before its slot starts" }, 400, cors);
+    }
+  }
   const id = crypto.randomUUID();
+  const eventId = crypto.randomUUID();
   const now = new Date().toISOString();
-  try {
-    await env.DB.prepare(`
+  const statements = [
+    env.DB.prepare(`
       INSERT INTO blocked_slots (id, pickup_date, pickup_slot, reason, created_by, created_at)
       VALUES (?, ?, ?, ?, ?, ?)
-    `).bind(id, pickupDate, pickupSlot, reason || null, actor || null, now).run();
+    `).bind(id, pickupDate, pickupSlot, reason || null, actor || null, now),
+    env.DB.prepare(`
+      INSERT INTO capacity_events (id, block_id, event_type, actor_id, reason, revision, created_at)
+      VALUES (?, ?, 'created', ?, ?, 1, ?)
+    `).bind(eventId, id, actor || null, reason || null, now),
+    env.DB.prepare(`
+      SELECT COUNT(*) AS n FROM bookings
+      WHERE pickup_date = ? AND status NOT IN ('cancelled', 'delivered')
+        AND (? IS NULL OR pickup_slot = ?)
+    `).bind(pickupDate, pickupSlot, pickupSlot),
+  ];
+  let results;
+  try {
+    results = await env.DB.batch(statements);
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
     if (message.includes("UNIQUE constraint failed")) {
@@ -2331,17 +2418,41 @@ async function createOperatorBlockedSlot(request, env, actor, cors) {
     }
     throw error;
   }
-  console.log(JSON.stringify({ event: "blocked_slot_created", pickupDate, pickupSlot, affectedBookings: Number(affected?.n) || 0, actor }));
-  const row = await env.DB.prepare("SELECT * FROM blocked_slots WHERE id = ?").bind(id).first();
-  return jsonResponse({ block: blockedSlotForClient(row), affectedBookings: Number(affected?.n) || 0 }, 201, cors);
+  const affectedBookings = Number(results[2]?.results?.[0]?.n) || 0;
+  const block = { id, pickupDate, pickupSlot, reason, createdBy: actor || null, createdAt: now, revision: 1 };
+  console.log(JSON.stringify({ event: "blocked_slot_created", pickupDate, pickupSlot, affectedBookings, actor }));
+  return jsonResponse({ block, affectedBookings }, 201, cors);
 }
 
-async function deleteOperatorBlockedSlot(env, id, actor, cors) {
-  const row = await env.DB.prepare("SELECT pickup_date, pickup_slot FROM blocked_slots WHERE id = ?").bind(id).first();
+async function deleteOperatorBlockedSlot(request, env, id, actor, cors) {
+  const input = await readJson(request);
+  if (!input || typeof input !== "object" || Array.isArray(input)
+    || Object.keys(input).some((key) => key !== "revision")
+    || !Number.isSafeInteger(input.revision) || input.revision < 1) {
+    return jsonResponse({ error: "A positive block revision is required" }, 400, cors);
+  }
+  const row = await env.DB.prepare("SELECT id, revision, removed_at FROM blocked_slots WHERE id = ?").bind(id).first();
   if (!row) return jsonResponse({ error: "Block not found" }, 404, cors);
-  const result = await env.DB.prepare("DELETE FROM blocked_slots WHERE id = ?").bind(id).run();
-  if (result?.meta?.changes !== 1) return jsonResponse({ error: "Block not found" }, 404, cors);
-  console.log(JSON.stringify({ event: "blocked_slot_removed", pickupDate: row.pickup_date, pickupSlot: row.pickup_slot, actor }));
+  if (row.removed_at !== null || row.revision !== input.revision) {
+    return jsonResponse({ error: "This capacity block changed; refresh the list", code: "stale_revision" }, 409, cors);
+  }
+  const now = new Date().toISOString();
+  const eventId = crypto.randomUUID();
+  const nextRevision = input.revision + 1;
+  const results = await env.DB.batch([
+    env.DB.prepare(`
+      UPDATE blocked_slots SET removed_at = ?, removed_by = ?, revision = revision + 1
+      WHERE id = ? AND revision = ? AND removed_at IS NULL
+    `).bind(now, actor, id, input.revision),
+    env.DB.prepare(`
+      INSERT INTO capacity_events (id, block_id, event_type, actor_id, reason, revision, created_at)
+      SELECT ?, ?, 'removed', ?, NULL, ?, ? WHERE changes() = 1
+    `).bind(eventId, id, actor, nextRevision, now),
+  ]);
+  if (results[0]?.meta?.changes !== 1) {
+    return jsonResponse({ error: "This capacity block changed; refresh the list", code: "stale_revision" }, 409, cors);
+  }
+  console.log(JSON.stringify({ event: "blocked_slot_removed", blockId: id, actor }));
   return jsonResponse({ ok: true }, 200, cors);
 }
 
@@ -2470,14 +2581,14 @@ export default {
           return await createOperatorPromotion(request, env, operator.email, cors || {});
         }
         if (request.method === "GET" && url.pathname === "/api/operator/blocked-slots") {
-          return await getOperatorBlockedSlots(env, cors || {});
+          return await getOperatorBlockedSlots(request, env, cors || {});
         }
         if (request.method === "POST" && url.pathname === "/api/operator/blocked-slots") {
           return await createOperatorBlockedSlot(request, env, operator.email, cors || {});
         }
         const blockedMatch = url.pathname.match(/^\/api\/operator\/blocked-slots\/([0-9a-f-]{36})$/i);
         if (blockedMatch && request.method === "DELETE") {
-          return await deleteOperatorBlockedSlot(env, blockedMatch[1], operator.email, cors || {});
+          return await deleteOperatorBlockedSlot(request, env, blockedMatch[1], operator.email, cors || {});
         }
         const promoMatch = url.pathname.match(/^\/api\/operator\/promotions\/([0-9a-f-]{36})$/i);
         if (promoMatch && request.method === "PATCH") {

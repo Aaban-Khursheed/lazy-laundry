@@ -85,7 +85,7 @@ files in `tests/worker.test.js`.
 | `POST …/share\|rotate\|revoke` | tracking-token lifecycle (re-encrypts stored token) |
 | `POST /api/operator/penalties/:id/waive` | waive penalty with audit |
 | `GET/POST /api/operator/promotions`, `PATCH …/:id` | promo CRUD + events |
-| `GET/POST /api/operator/blocked-slots`, `DELETE …/:id` | capacity blocks: date or date+slot, `affectedBookings` count on create, active schedule echoed for the UI |
+| `GET/POST /api/operator/blocked-slots`, `DELETE …/:id` | capacity blocks: date or date+slot; list is paged (`page.{limit,offset,hasMore}`) and carries `affectedBookings` (active bookings on the date/slot, count only); DELETE requires the row's `revision` and soft-deletes (`removed_at`) with a `capacity_events` audit row; active schedule echoed for the UI |
 
 ## Data model (D1)
 
@@ -112,13 +112,17 @@ files in `tests/worker.test.js`.
 - **promotions + promotion_events** — percent/fixed codes, min spend, max
   redemptions, active window; discount applies to service total only.
 - **blocked_slots** — operator capacity blocks. `pickup_slot` NULL blocks the
-  whole date; partial unique indexes dedupe whole-date and date+slot rows.
-  Checked in `getAvailability`, as a `slotBlockFor` pre-check on customer
-  create/reschedule, and as a `NOT EXISTS` guard inside the booking insert
-  and reschedule update transactions. Blocks never cancel existing bookings;
-  operators bypass them deliberately.
+  whole date; partial unique indexes (`0010`) dedupe *active* (`removed_at IS
+  NULL`) whole-date and date+slot rows. Removal is a revision-guarded
+  soft-delete; `capacity_events` records create/remove. Checked in
+  `getAvailability`, as a `slotBlockFor` pre-check on customer
+  create/reschedule, and as a `NOT EXISTS ... AND removed_at IS NULL` guard
+  inside the booking insert and reschedule update transactions. Blocks never
+  cancel existing bookings; operators bypass them deliberately.
 
-Migrations (`api/migrations/`) are additive and **not undone by rollback**.
+Migrations (`api/migrations/`) are append-only and **not undone by rollback**;
+`npm run db:check` enforces ordering and requires a recorded review for
+destructive statements.
 
 ## Booking creation — the transactional core
 

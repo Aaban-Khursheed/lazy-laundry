@@ -53,8 +53,9 @@ async function applyPublicConfig() {
     }
     bookingEnabled = config.bookingEnabled;
     setBookingEnabled(bookingEnabled);
-    if (setBookingLeadMinutes(config.bookingLeadMinutes)) refreshBookingWindow();
-    setPickupSchedule(config.weekdaySlots, config.weekendSlots);
+    const scheduleChanged = setPickupSchedule(config.weekdaySlots, config.weekendSlots);
+    const leadChanged = setBookingLeadMinutes(config.bookingLeadMinutes);
+    if (scheduleChanged || leadChanged) refreshBookingWindow(true);
     const leadHint = document.querySelector("#slot-lead-hint");
     const lead = getBookingLeadMinutes();
     leadHint.textContent = `Book at least ${lead} min before pickup`;

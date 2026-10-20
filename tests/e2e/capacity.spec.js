@@ -11,17 +11,23 @@ function klDateString(daysAhead) {
   return now.toISOString().slice(0, 10);
 }
 
+// Each call claims a distinct loopback client IP so rate-limiter buckets
+// (enforced locally now) can never cross-contaminate tests.
+function randomClientIp() {
+  return `10.${Math.floor(Math.random() * 254) + 1}.${Math.floor(Math.random() * 254) + 1}.${Math.floor(Math.random() * 254) + 1}`;
+}
+
 async function apiFetch(page, path, options = {}) {
   return page.evaluate(async ([url, init]) => {
     const response = await fetch(url, {
       method: init.method || "GET",
-      headers: { "Content-Type": "application/json", ...(init.headers || {}) },
+      headers: { "Content-Type": "application/json", "X-Forwarded-For": init.ip, ...(init.headers || {}) },
       ...(init.body ? { body: JSON.stringify(init.body) } : {}),
     });
     let body = null;
     try { body = await response.json(); } catch { /* non-json */ }
     return { status: response.status, body };
-  }, [path, options]);
+  }, [path, { ip: randomClientIp(), ...options }]);
 }
 
 test("operator capacity block hides the date from customers until removed", async ({ page }) => {
@@ -31,7 +37,7 @@ test("operator capacity block hides the date from customers until removed", asyn
   // Test-data hygiene: remove any stale block on this date from a previous run.
   const existing = await apiFetch(page, "/api/operator/blocked-slots", { headers: OPERATOR_HEADERS });
   for (const block of existing.body?.blocks || []) {
-    if (block.pickupDate === date) await apiFetch(page, `/api/operator/blocked-slots/${block.id}`, { method: "DELETE", headers: OPERATOR_HEADERS });
+    if (block.pickupDate === date) await apiFetch(page, `/api/operator/blocked-slots/${block.id}`, { method: "DELETE", headers: OPERATOR_HEADERS, body: { revision: block.revision } });
   }
   await page.reload();
 
@@ -75,7 +81,7 @@ test("operator capacity block hides the date from customers until removed", asyn
   await item.locator("[data-capacity-delete]").click();
   await expect(page.locator(".operator-dialog")).toBeVisible();
   await page.locator(".operator-dialog [type=submit]").click();
-  await expect(page.locator("#operator-capacity-success")).toContainText("open for bookings again");
+  await expect(page.locator("#operator-capacity-success")).toContainText("capacity block removed");
   await expect(item).toHaveCount(0);
 
   const reopened = await customer.evaluate(async (d) => {

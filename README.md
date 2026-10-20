@@ -12,17 +12,27 @@ assets are never served on customer hosts.
 
 Full system internals — request pipeline, data model, security model,
 failure-mode contract, decision records: **`docs/ARCHITECTURE.md`**.
+Day-to-day operation, alerts, emergency stop, deploy/rollback, restore drill:
+**`docs/OPERATIONS.md`**.
 
 ## Commands
 
 | Command | Purpose |
 |---|---|
-| `npm run dev` | `wrangler dev --env local`, local D1 only, `http://localhost:8787` |
-| `npm run lint` / `npm run test` | ESLint + vitest unit tests |
+| `npm run dev` | `wrangler dev --env local`, local D1 only, `http://localhost:8787` (any loopback port works — `--port N` needs no CORS config) |
+| `npm run lint` / `npm run test` | ESLint (js+mjs, `no-undef`/`no-unused-vars` enforced) + vitest unit tests |
 | `npm run test:e2e` | Playwright against the local worker |
+| `npm run test:infra` | isolated workerd + disposable D1 health gates (`testing/`) |
+| `npm run test:integration` | real-D1 integration tests via the harness (`testing/integration/`) |
+| `npm run db:check` | migration guardrail: ordering + destructive-statement review gate |
 | `npm run deploy:dry-run` | build + lint + test, then `wrangler deploy --dry-run` |
 | `npm run deploy` | build + lint + test, then production deploy |
 | `npm run build:ui` | bundle `src/{booking,operator}/app.js` → minified `public/{booking,operator}/app.js` (auto-runs before dev/test/deploy) |
+
+Local `env.local` binds the same `RATE_LIMITER` (100/min) and
+`RATE_LIMITER_BOOKING` (5/min) limiters as production — real 429s are
+enforced by in-memory workerd limiters. Automated callers must send a
+distinct `X-Forwarded-For` per test/client to avoid sharing a bucket.
 
 ## Configuration inventory
 
@@ -94,11 +104,15 @@ the binding's `destination_address`.
 ## Database
 
 D1 `lazylaundry-db` (prod) / `lazy-laundry-local` (dev). Migrations in
-`api/migrations/` are **additive and not undone by Worker rollback**.
+`api/migrations/` are **applied once and never undone by Worker rollback** —
+append new files only, never edit an applied migration. `npm run db:check`
+enforces filename ordering, flags destructive statements (`DROP`, `RENAME`,
+`DELETE`, `UPDATE`, `REPLACE INTO`) in unreviewed migrations, and verifies the
+`migrations_dir` config.
 
 ```bash
-wrangler d1 migrations apply lazylaundry-db            # production (after review)
-wrangler d1 migrations apply lazy-laundry-local --local  # local
+wrangler d1 migrations apply lazylaundry-db                      # production (after review)
+wrangler d1 migrations apply lazy-laundry-local --local --env local  # local
 ```
 
 A Worker rollback restores code only — already-applied migrations stay. Review

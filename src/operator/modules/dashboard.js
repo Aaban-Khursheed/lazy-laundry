@@ -458,6 +458,7 @@ async function loadQueue() {
     if (!Array.isArray(result?.bookings) || result.bookings.some((booking) => !booking || typeof booking.id !== "string")) throw new Error("The operator API returned an invalid bookings response.");
     const responsePage = result.page;
     if (responsePage && (!Number.isInteger(responsePage.offset) || responsePage.offset < 0 || !Number.isInteger(responsePage.limit) || responsePage.limit < 1 || !Number.isInteger(responsePage.total) || responsePage.total < 0 || typeof responsePage.hasMore !== "boolean")) throw new Error("The operator API returned invalid pagination.");
+    if (setPickupSchedule(result.weekdaySlots, result.weekendSlots)) refreshEditSlotOptions();
     updateSummary(result, result.bookings);
     bookings = result.bookings;
     page = responsePage || { offset: requested.offset, limit: PAGE_SIZE, total: requested.offset + bookings.length, hasMore: false };
@@ -882,11 +883,42 @@ function updateCapacityControls() {
 }
 
 async function fetchCapacityBlocks() {
-  const result = await apiRequest("/api/operator/blocked-slots", { method: "GET", credentials: "include" });
-  if (!Array.isArray(result?.blocks)) throw new Error("The operator API returned an invalid capacity response.");
-  setPickupSchedule(result.weekdaySlots, result.weekendSlots);
+  const deadline = performance.now() + 15000;
+  const fetched = [];
+  const seen = new Set();
+  let offset = 0;
+  let schedule = null;
+  for (let pageIndex = 0; pageIndex < 100; pageIndex += 1) {
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) throw new Error("Blocked pickups took too long to load — use Refresh to try again.");
+    const params = new URLSearchParams({ limit: "100", offset: String(offset) });
+    const result = await apiRequest(`/api/operator/blocked-slots?${params}`, { method: "GET", credentials: "include", timeoutMs: remaining });
+    if (!Array.isArray(result?.blocks) || !result.page || typeof result.page.hasMore !== "boolean"
+      || result.page.offset !== offset || !Number.isSafeInteger(result.page.limit) || result.page.limit < 1
+      || result.page.limit > 100) {
+      throw new Error("The operator API returned an invalid capacity response.");
+    }
+    let newBlocks = 0;
+    for (const block of result.blocks) {
+      if (!block || typeof block.id !== "string") throw new Error("The operator API returned an invalid capacity response.");
+      if (seen.has(block.id)) continue;
+      seen.add(block.id);
+      fetched.push(block);
+      newBlocks += 1;
+    }
+    if (!result.page.hasMore) {
+      schedule = { weekday: result.weekdaySlots, weekend: result.weekendSlots };
+      break;
+    }
+    if (newBlocks === 0 || result.blocks.length > result.page.limit) {
+      throw new Error("The operator API returned an invalid capacity response.");
+    }
+    offset += result.page.limit;
+  }
+  if (!schedule) throw new Error("Blocked pickups could not be fully loaded — use Refresh to try again.");
+  setPickupSchedule(schedule.weekday, schedule.weekend);
   syncCapacitySlotOptions();
-  capacityBlocks = result.blocks;
+  capacityBlocks = fetched;
   capacityLoaded = true;
   renderCapacity();
   elements.capacityUpdated.textContent = `Updated ${new Date().toLocaleTimeString("en-MY", { hour: "numeric", minute: "2-digit" })}`;
@@ -932,6 +964,7 @@ function renderCapacity() {
   elements.capacityList.innerHTML = "";
   elements.capacityEmpty.hidden = capacityBlocks.length > 0;
   for (const block of capacityBlocks) {
+    const affected = Number(block.affectedBookings) || 0;
     const item = document.createElement("li");
     item.className = "operator-promo-item";
     item.innerHTML = `
@@ -940,6 +973,7 @@ function renderCapacity() {
         <span data-ui="badge" data-tone="neutral">${block.pickupSlot ? escapeHtml(formatSlot(block.pickupSlot)) : "Whole day"}</span>
       </div>
       <p class="operator-promo-meta">${block.reason ? escapeHtml(block.reason) : "No reason recorded"}</p>
+      ${affected > 0 ? `<p class="operator-promo-meta">${affected} active booking${affected === 1 ? "" : "s"} still need${affected === 1 ? "s" : ""} handling — block does not cancel them.</p>` : ""}
       <div class="operator-promo-actions">
         <button type="button" data-ui="button" data-intent="danger" data-size="sm" data-capacity-delete="${escapeHtml(block.id)}">Remove</button>
       </div>`;
@@ -1007,13 +1041,24 @@ async function removeCapacityBlock(id) {
   updateCapacityControls();
   clearCapacityFeedback();
   try {
-    await deleteBlockedSlot(id);
+    await deleteBlockedSlot(id, block.revision);
     elements.capacitySuccess.hidden = false;
-    elements.capacitySuccess.textContent = `${label} is open for bookings again.`;
+    elements.capacitySuccess.textContent = `${label}: capacity block removed. Other blocks and existing bookings can still make this pickup unavailable.`;
     capacityBlocks = capacityBlocks.filter((entry) => entry.id !== id);
     renderCapacity();
   } catch (error) {
-    showError(elements.capacityError, error.message || "The block could not be removed.");
+    if (error?.status === 409 || error?.code === "stale_revision") {
+      try {
+        await fetchCapacityBlocks();
+        showError(elements.capacityError, `${label}: this capacity block changed — the list was refreshed. Remove it again if it still appears.`);
+      } catch {
+        showError(elements.capacityError, `${label}: this capacity block changed and the list could not refresh — use Refresh to reload it.`);
+      }
+    } else if (error?.outcomeUnknown) {
+      showError(elements.capacityError, `${label}: removal status is unknown — the block may or may not have been removed. Use Refresh to check the list before trying again.`);
+    } else {
+      showError(elements.capacityError, error.message || "The block could not be removed.");
+    }
   } finally {
     capacityBusy = false;
     updateCapacityControls();

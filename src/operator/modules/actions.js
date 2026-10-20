@@ -78,9 +78,12 @@ export async function createBlockedSlot({ pickupDate, pickupSlot, reason }) {
   });
 }
 
-export async function deleteBlockedSlot(id) {
+export async function deleteBlockedSlot(id, revision) {
+  if (!Number.isSafeInteger(revision) || revision < 1) {
+    throw new Error("This capacity block has no current revision. Refresh the list before removing it.");
+  }
   const result = await apiRequest(`/api/operator/blocked-slots/${encodeURIComponent(id)}`, {
-    method: "DELETE", credentials: "include", timeoutMs: 15000, body: {},
+    method: "DELETE", credentials: "include", timeoutMs: 15000, body: { revision },
   });
   return validateMutation(() => {
     if (result?.ok !== true) throw new Error("The operator API returned an invalid response.");

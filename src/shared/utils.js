@@ -32,10 +32,18 @@ let weekdaySlots = ["19:00", "20:00", "21:00"];
 let weekendSlots = ["10:00", "11:00", "12:00", "19:00", "20:00", "21:00"];
 
 export function setPickupSchedule(weekday, weekend) {
-  const valid = (list) => Array.isArray(list) && list.length > 0 && list.length <= 12
-    && list.every((slot) => /^([01]\d|2[0-3]):[0-5]\d$/.test(slot));
-  if (valid(weekday)) weekdaySlots = [...weekday].sort();
-  if (valid(weekend)) weekendSlots = [...weekend].sort();
+  const normalize = (slots) => {
+    if (!Array.isArray(slots) || !slots.length || slots.length > 12
+      || slots.some((slot) => typeof slot !== "string" || !/^([01]\d|2[0-3]):[0-5]\d$/.test(slot))) return null;
+    return [...new Set(slots)].sort();
+  };
+  const nextWeekday = normalize(weekday);
+  const nextWeekend = normalize(weekend);
+  if (!nextWeekday || !nextWeekend) return false;
+  const changed = nextWeekday.join(",") !== weekdaySlots.join(",") || nextWeekend.join(",") !== weekendSlots.join(",");
+  weekdaySlots = nextWeekday;
+  weekendSlots = nextWeekend;
+  return changed;
 }
 
 export function getSlotsForDate(dateString) {

@@ -1,6 +1,6 @@
 import { buttonVariants } from "../../shared/variants.js";
-import { PRICING, STATUS_STEPS } from "./constants.js";
-import { API_MODE, apiRequest } from "./api.js";
+import { PRICING } from "./constants.js";
+import { apiRequest } from "./api.js";
 import { getTurnstileToken } from "./turnstile.js";
 import {
   clearError,
@@ -38,7 +38,7 @@ const checkoutTotalPrice = document.querySelector("#checkout-total-price");
 const checkoutPriceBreakdown = document.querySelector("#checkout-price-breakdown");
 const checkoutPickupSummary = document.querySelector("#checkout-pickup-summary");
 const bookingStepError = document.querySelector("#booking-step-error");
-const termsAcceptedInput = document.querySelector("#terms-accepted");
+
 const countryCodeInput = document.querySelector("#customer-country-code");
 const customerPhoneInput = document.querySelector("#customer-phone");
 const promoInput = document.querySelector("#customer-promo");
@@ -243,10 +243,11 @@ async function loadAvailability(dateString, alignToAvailable) {
     currentBlockedSlots = new Set(Array.isArray(result.blockedSlots) ? result.blockedSlots.filter((slot) => typeof slot === "string") : []);
     currentBlockedDate = result.blockedDate === true;
     loadedAvailabilityDate = dateString;
-    pickupSlotInput.value = selectedSlot;
     if (currentBlockedDate) {
+      pickupSlotInput.value = "";
       showAvailabilityMessage("Pickup is unavailable on this date. Choose another day.");
     } else {
+      pickupSlotInput.value = selectedSlot;
       renderSlots(alignToAvailable);
     }
   } catch (error) {
@@ -259,11 +260,7 @@ async function loadAvailability(dateString, alignToAvailable) {
 
 function refreshSlots(dateString, alignToAvailable = false) {
   if (isBookingLocked()) return;
-  if (API_MODE) {
-    loadAvailability(dateString, alignToAvailable);
-  } else {
-    renderSlots(alignToAvailable);
-  }
+  loadAvailability(dateString, alignToAvailable);
 }
 
 function isDateSlotBooked(dateString, slot) {
@@ -277,7 +274,7 @@ function isSlotBlocked(slot) {
 export function renderSlots(alignToAvailable = false) {
   if (isBookingLocked()) return;
   const dateString = pickupDateInput.value;
-  if (API_MODE && loadedAvailabilityDate !== dateString) {
+  if (loadedAvailabilityDate !== dateString) {
     return;
   }
 
@@ -535,7 +532,7 @@ async function submitApiBooking(payload, signature, onBookingCreated) {
     }
     const turnstileToken = await getTurnstileToken("booking");
     if (!pendingBooking && formSignature() !== signature) throw new Error("Your details changed during verification. Review them and try again.");
-    if (!pendingBooking && (payload.pickupDate < getTodayString() || payload.pickupDate > getMaxBookingDateString() || isSlotClosed(payload.pickupDate, payload.pickupSlot))) {
+    if (!pendingBooking && (payload.pickupDate < getTodayString() || payload.pickupDate > getMaxBookingDateString() || isSlotBlocked(payload.pickupSlot) || isSlotClosed(payload.pickupDate, payload.pickupSlot))) {
       slotConflict = true;
       throw new Error("The pickup time expired during confirmation. Choose an available pickup slot.");
     }
@@ -549,7 +546,7 @@ async function submitApiBooking(payload, signature, onBookingCreated) {
       },
       body: pendingBooking.payload,
     });
-    if (!result?.booking || !/^LL-[A-F0-9]{8}$/.test(result.booking.number) || !/^[A-Za-z0-9_-]{43}$/.test(result.trackingToken) || !/^\d{4}-\d{2}-\d{2}$/.test(result.booking.pickupDate) || !getSlotsForDate(result.booking.pickupDate).includes(result.booking.pickupSlot) || typeof result.booking.total !== "number" || !Number.isFinite(result.booking.total) || result.booking.total < 0 || !PRICING[result.booking.packageSize] || typeof result.booking.readyTime !== "string") {
+    if (!result?.booking || !/^LL-[A-F0-9]{8}$/.test(result.booking.number) || !/^[A-Za-z0-9_-]{43}$/.test(result.trackingToken) || !/^\d{4}-\d{2}-\d{2}$/.test(result.booking.pickupDate) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(result.booking.pickupSlot) || typeof result.booking.total !== "number" || !Number.isFinite(result.booking.total) || result.booking.total < 0 || !PRICING[result.booking.packageSize] || typeof result.booking.readyTime !== "string") {
       const error = new Error("The booking confirmation response could not be verified.");
       error.outcomeUnknown = true;
       throw error;
@@ -594,11 +591,11 @@ export function initializeBooking({ showView, onBookingCreated }) {
     if (isBookingLocked() || !bookingEnabled) return;
     refreshBookingWindow();
     clearError(bookingStepError);
-    if (!pickupSlotInput.value || !isSlotInCurrentSchedule(pickupDateInput.value, pickupSlotInput.value)) {
+    if (!pickupSlotInput.value || !isSlotInCurrentSchedule(pickupDateInput.value, pickupSlotInput.value) || isSlotBlocked(pickupSlotInput.value)) {
       showError(bookingStepError, "Choose an available pickup slot before continuing.");
       return;
     }
-    if (API_MODE && loadedAvailabilityDate !== pickupDateInput.value) {
+    if (loadedAvailabilityDate !== pickupDateInput.value) {
       showError(bookingStepError, "Pickup availability is still loading or unavailable. Retry availability before continuing.");
       return;
     }
@@ -675,12 +672,12 @@ export function initializeBooking({ showView, onBookingCreated }) {
       return;
     }
 
-    if (API_MODE && loadedAvailabilityDate !== pickupDateInput.value) {
+    if (loadedAvailabilityDate !== pickupDateInput.value) {
       showError(formError, "Pickup availability is still loading or unavailable. Retry availability before confirming.");
       return;
     }
 
-    if (isDateSlotBooked(pickupDateInput.value, pickupSlotInput.value) || isSlotClosed(pickupDateInput.value, pickupSlotInput.value)) {
+    if (isDateSlotBooked(pickupDateInput.value, pickupSlotInput.value) || isSlotBlocked(pickupSlotInput.value) || isSlotClosed(pickupDateInput.value, pickupSlotInput.value)) {
       showError(formError, "That pickup slot is no longer available. Please choose another slot.");
       refreshSlots(pickupDateInput.value, true);
       return;
