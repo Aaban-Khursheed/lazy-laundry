@@ -222,7 +222,11 @@ async function loadRescheduleAvailability(context) {
       loadRescheduleAvailability(context);
       return;
     }
-    const slots = getSlotsForDate(date).filter((slot) => !isSlotClosed(date, slot) && (!result.bookedSlots.includes(slot) || (context.booking.pickupDate === date && context.booking.pickupSlot === slot)));
+    const blockedSlots = Array.isArray(result.blockedSlots) ? result.blockedSlots : [];
+    const wholeDateBlocked = result.blockedDate === true;
+    const slots = getSlotsForDate(date).filter((slot) => !isSlotClosed(date, slot)
+      && (!result.bookedSlots.includes(slot) || (context.booking.pickupDate === date && context.booking.pickupSlot === slot))
+      && !wholeDateBlocked && !blockedSlots.includes(slot));
     rescheduleAvailability = { date, ready: slots.length > 0, slots };
     slotInput.innerHTML = slots.map((slot) => `<option value="${escapeHtml(slot)}">${escapeHtml(formatSlot(slot))}</option>`).join("");
     const preferred = selectedSlot || (context.booking.pickupDate === date ? context.booking.pickupSlot : "");

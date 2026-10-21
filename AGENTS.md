@@ -3,8 +3,9 @@
 ## Scope
 
 - This repository is the canonical Lazy Laundry project for `Aaban-Khursheed/lazy-laundry`.
+- Day-to-day maintenance sits with the incoming maintainer as of 2026-10-21 (role-based record, `docs/HANDOFF.md`); the canonical repository is unchanged.
 - Do not modify unrelated accounts, repositories, or identities, including `Dannny-101` and `tenandseeagency`.
-- Keep production intake disabled until the legal, operational, Cloudflare, and security launch gates are approved.
+- Public booking intake is open by owner decision (2026-10-19). `PUBLIC_BOOKING_ENABLED` in `wrangler.jsonc` must match production; change it only on the owner's instruction (it is the emergency stop; see README).
 
 ## Architecture
 
@@ -35,13 +36,14 @@ The local Worker listens on `http://localhost:8787`. Local operator smoke tests 
 
 ## Data and security
 
-- D1 migrations are additive and are not undone by Worker rollback. Review them before deployment.
+- D1 migrations are append-only: add a new `api/migrations/NNNN_name.sql` file per change, never edit an applied file. Applied migrations are not undone by Worker rollback. `npm run db:check` gates ordering and flags destructive statements (`DROP`, `RENAME`, `DELETE`, `UPDATE`, `REPLACE INTO`) that lack a recorded review.
 - Use parameterized SQL, integer sen values, guarded batch writes, revision checks, and the unique active pickup-slot constraint.
 - Customer tracking responses must not expose name, phone, block, unit, notes, penalties, or operator identity.
 - Tracking credentials are bearer secrets: keep them in URL fragments only, never in API URLs, logs, storage, exports, or cacheable responses.
+- Operator alert emails go only to the binding's pinned `destination_address`; they may carry customer PII the operator needs but must never include tracking tokens. Alert delivery is best-effort (`ctx.waitUntil`, one transient retry): it must never block, delay, or fail a customer request, and failures log `operator_alert_failed` without PII.
 - Public mutations require same-origin JSON requests and server-side Turnstile verification in production. Configure the `RATE_LIMITER` binding before public intake; rate limiting is an abuse control, not authoritative accounting.
 - Operator access requires Cloudflare Access plus Worker-side JWT verification in production.
-- Do not enable real customer intake while legal pages contain draft placeholders or the privacy controller/contact is unresolved.
+- Intake is open. Bilingual (BM/EN) Terms and Privacy Notice are published at `/legal/` and `TERMS_POLICY_VERSION` is `launch-v2`; any policy change bumps that version.
 
 ## UI architecture
 
@@ -57,7 +59,7 @@ The local Worker listens on `http://localhost:8787`. Local operator smoke tests 
 
 ## Mandatory launch baseline
 
-- Improve and verify the apps against local D1 before production setup. A later authorized protected deployment is for production-binding acceptance, not a substitute for working UI. Real intake stays disabled until all product and launch gates pass.
+- Improve and verify the apps against local D1 before production setup. A later authorized protected deployment is for production-binding acceptance, not a substitute for working UI. Intake is open by owner decision; every baseline item below remains mandatory for each release.
 - Operator density: preserve the sidebar and header. The queue is a card grid (ten orders per page, five across at 1440px and wider, fewer columns at narrower desktop widths); order details open in an on-demand modal drawer with Overview/Booking/Activity tabs instead of a permanent detail panel. At 1280×800, the card grid and an open order's primary lifecycle/payment controls must be visible without page scrolling. Card content stays readable — pickup date/time must never be clipped into ambiguity — and not reduced to tiny text. The drawer must support Escape, warn before discarding unsaved notes, restore focus to the triggering card control, and preserve queue context (filters, page, scroll position). Put tracking administration, notes/history, fee details, and operational explanations behind accessible disclosures in the Activity tab.
 - Operator discovery: status filtering, search, and pagination must query the database, not silently stop at the first 50 records. Display the result range and total; keep summary and export scope explicit. SQL search is bounded and parameterized, and must not put phone/name/location searches in GET URLs or logs.
 - Operator integrity: prevent parallel writes, require audit reasons for exceptional actions, reject stale revisions, preserve note drafts and disclosure state across same-order refresh, and explicitly warn before discarding unsaved notes. Private tracking links remain memory-only and clear on order switch, close, or small-screen transition.

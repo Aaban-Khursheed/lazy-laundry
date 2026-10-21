@@ -719,13 +719,19 @@
 }
 
 .customer-app .terms-copy span,
+.customer-app .terms-links,
 .customer-app .terms-details {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.6;
 }
 
-.customer-app .terms-copy a {
+.customer-app .terms-links {
+  margin: 4px 0 0 35px;
+}
+
+.customer-app .terms-copy a,
+.customer-app .terms-links a {
   display: inline-flex;
   min-height: 44px;
   align-items: center;

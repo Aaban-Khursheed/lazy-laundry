@@ -1,0 +1,81 @@
+name: Local Release Gates
+
+on:
+  pull_request:
+  push:
+    branches: [v1.0, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-gates-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CI: "true"
+      WRANGLER_SEND_METRICS: "false"
+      CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV: "false"
+      LIBERAIT_RUN_ID: ci_${{ github.run_id }}_${{ github.run_attempt }}
+      LIBERAIT_RUN_DIR: ${{ github.workspace }}/test-results/infra/ci_${{ github.run_id }}_${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: "24.15.0"
+          cache: npm
+      - name: Install Locked Dependencies
+        run: npm ci --include=optional --no-audit --no-fund
+      - name: Prepare Evidence Directory
+        run: install -d -m 700 "$LIBERAIT_RUN_DIR"
+      - name: Validate Migration Target
+        id: migration
+        run: npm run db:check
+      - name: Lint And Unit Tests
+        id: unit
+        run: npm run lint && npm run test
+      - name: Build Browser Assets
+        run: npm run build:ui
+      - name: Native Runtime And D1 Tests
+        id: native
+        run: npm run test:infra && npm run test:integration
+      - name: Install Chromium
+        run: ./node_modules/.bin/playwright install --with-deps chromium
+      - name: Isolated Browser Tests
+        id: browser
+        run: npm run test:e2e:infra && npm run test:e2e
+      - name: Package Worker Without Deployment
+        id: bundle
+        run: npm run deploy:dry-run
+      - name: Record Gate Evidence
+        if: always()
+        env:
+          MIGRATION_OUTCOME: ${{ steps.migration.outcome }}
+          UNIT_OUTCOME: ${{ steps.unit.outcome }}
+          NATIVE_OUTCOME: ${{ steps.native.outcome }}
+          BROWSER_OUTCOME: ${{ steps.browser.outcome }}
+          BUNDLE_OUTCOME: ${{ steps.bundle.outcome }}
+        run: |
+          install -d -m 700 "$LIBERAIT_RUN_DIR"
+          {
+            printf 'run_id=%s\nsource_sha=%s\nsource_ref=%s\n' "$LIBERAIT_RUN_ID" "$GITHUB_SHA" "$GITHUB_REF"
+            printf 'node=%s\n' "$(node --version)"
+            sha256sum package-lock.json
+            printf 'migration=%s\nunit=%s\nnative=%s\nbrowser=%s\nbundle=%s\n' "$MIGRATION_OUTCOME" "$UNIT_OUTCOME" "$NATIVE_OUTCOME" "$BROWSER_OUTCOME" "$BUNDLE_OUTCOME"
+            printf 'production_acceptance=NOT_ESTABLISHED\n'
+          } > "$LIBERAIT_RUN_DIR/ci-evidence.txt"
+      - name: Preserve Non-Private Evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-gates-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results/infra/**/ci-evidence.txt
+          if-no-files-found: error
+          retention-days: 7

@@ -18,14 +18,19 @@ function slotsForDate(dateString) {
     : ["19:00", "20:00", "21:00"];
 }
 
+// Distinct loopback client IP per call keeps rate-limiter buckets isolated.
+function randomClientIp() {
+  return `10.${Math.floor(Math.random() * 254) + 1}.${Math.floor(Math.random() * 254) + 1}.${Math.floor(Math.random() * 254) + 1}`;
+}
+
 async function apiFetch(page, path, options = {}) {
   return page.evaluate(async ({ path: requestPath, options: requestOptions }) => {
     const response = await fetch(requestPath, {
       ...requestOptions,
-      headers: { "Content-Type": "application/json", ...(requestOptions.headers || {}) },
+      headers: { "Content-Type": "application/json", "X-Forwarded-For": requestOptions.ip, ...(requestOptions.headers || {}) },
     });
     return { status: response.status, body: await response.json() };
-  }, { path, options });
+  }, { path, options: { ip: randomClientIp(), ...options } });
 }
 
 test("customer booking, tracking, idempotency, and cancellation stay isolated", async ({ page }) => {

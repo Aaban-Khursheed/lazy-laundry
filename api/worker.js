@@ -1,3 +1,5 @@
+import { PRICE_CENTS } from "../src/shared/constants.js";
+
 const STATUS_CODES = [
   "confirmed",
   "pickup_on_the_way",
@@ -99,6 +101,9 @@ async function serveAsset(request, env, role) {
   if (role === "customer" && (pathname === "/" || pathname === "/index.html" || pathname === "/track" || pathname === "/track/")) {
     pathname = "/booking/index.html";
   }
+  if (role === "customer" && /^\/legal\/[a-z0-9-]+\/?$/i.test(pathname)) {
+    pathname = `${pathname.replace(/\/+$/, "")}/index.html`;
+  }
   if (role === "operator" && (pathname === "/" || pathname === "/index.html")) {
     pathname = "/operator/index.html";
   }
@@ -127,8 +132,19 @@ function getCorsHeaders(request, env) {
     env.CUSTOMER_ORIGIN,
     env.OPERATOR_ORIGIN,
     ...hosts.map((host) => `https://${host}`),
-    ...(env.ENVIRONMENT === "local" ? ["http://localhost:8787", "http://127.0.0.1:8787", "http://ops.localhost:8787"] : []),
   ].filter(Boolean));
+  if (env.ENVIRONMENT === "local") {
+    // Local dev may run on any loopback port; mutations are still gated by
+    // the strict Origin === request-origin check in mutationRequestError.
+    try {
+      const url = new URL(origin);
+      if (url.protocol === "http:" && ["localhost", "127.0.0.1", "ops.localhost"].includes(url.hostname)) {
+        allowedOrigins.add(origin);
+      }
+    } catch {
+      return null;
+    }
+  }
   if (!allowedOrigins.has(origin)) return null;
   return {
     "Access-Control-Allow-Origin": origin,
@@ -150,11 +166,12 @@ function mutationRequestError(request) {
   return null;
 }
 
-async function enforceRateLimit(request, env, route) {
-  if (!env.RATE_LIMITER) return { ok: env.ENVIRONMENT === "local", configured: false };
+async function enforceRateLimit(request, env, route, binding = "RATE_LIMITER") {
+  const limiter = env[binding];
+  if (!limiter) return { ok: env.ENVIRONMENT === "local", configured: false };
   const ip = request.headers.get("CF-Connecting-IP") || request.headers.get("X-Forwarded-For")?.split(",")[0]?.trim() || "unknown";
   try {
-    const result = await env.RATE_LIMITER.limit({ key: await sha256(`${route}:${ip}`) });
+    const result = await limiter.limit({ key: await sha256(`${route}:${ip}`) });
     return { ok: result?.success === true, configured: true };
   } catch {
     return { ok: false, configured: true };
@@ -252,23 +269,67 @@ function isValidDate(dateString) {
   return Number.isFinite(parsed.getTime()) && dateInKualaLumpur(parsed) === dateString;
 }
 
-function isScheduledSlot(dateString, slot) {
-  const weekday = new Date(`${dateString}T12:00:00+08:00`).getUTCDay();
-  const evening = ["19:00", "20:00", "21:00"];
-  const weekendMorning = ["10:00", "11:00", "12:00"];
-  return evening.includes(slot) || ((weekday === 0 || weekday === 6) && weekendMorning.includes(slot));
+const DEFAULT_WEEKDAY_SLOTS = ["19:00", "20:00", "21:00"];
+const DEFAULT_WEEKEND_SLOTS = ["10:00", "11:00", "12:00", "19:00", "20:00", "21:00"];
+
+function parseSlotList(raw, fallback) {
+  if (typeof raw !== "string" || !raw.trim()) return fallback;
+  const slots = raw.split(",").map((slot) => slot.trim());
+  const valid = slots.length > 0 && slots.length <= 12 && slots.every((slot) => /^([01]\d|2[0-3]):[0-5]\d$/.test(slot));
+  return valid ? [...new Set(slots)].sort() : fallback;
 }
 
-function isPickupSlotAvailable(dateString, slot) {
-  if (!isValidDate(dateString) || !isScheduledSlot(dateString, slot)) {
+function scheduleFor(env) {
+  return {
+    weekday: parseSlotList(env?.PICKUP_SLOTS_WEEKDAY, DEFAULT_WEEKDAY_SLOTS),
+    weekend: parseSlotList(env?.PICKUP_SLOTS_WEEKEND, DEFAULT_WEEKEND_SLOTS),
+  };
+}
+
+function isScheduledSlot(dateString, slot, schedule = { weekday: DEFAULT_WEEKDAY_SLOTS, weekend: DEFAULT_WEEKEND_SLOTS }) {
+  const weekday = new Date(`${dateString}T12:00:00+08:00`).getUTCDay();
+  return (weekday === 0 || weekday === 6 ? schedule.weekend : schedule.weekday).includes(slot);
+}
+
+const DEFAULT_BOOKING_LEAD_MINUTES = 60;
+
+function bookingLeadMinutes(env) {
+  const raw = String(env?.BOOKING_LEAD_MINUTES ?? "").trim();
+  const value = /^\d{1,4}$/.test(raw) ? Number(raw) : Number.NaN;
+  return value <= 1440 ? value : DEFAULT_BOOKING_LEAD_MINUTES;
+}
+
+const DEFAULT_ACTIVE_BOOKING_LIMIT = 2;
+const ACTIVE_BOOKING_STATUSES = "('confirmed', 'pickup_on_the_way', 'laundry_picked_up', 'processing', 'ready')";
+
+function activeBookingLimit(env) {
+  const raw = String(env?.ACTIVE_BOOKING_LIMIT ?? "").trim();
+  const value = /^\d{1,2}$/.test(raw) ? Number(raw) : DEFAULT_ACTIVE_BOOKING_LIMIT;
+  return Math.min(10, Math.max(1, value));
+}
+
+async function slotBlockFor(env, dateString, slot) {
+  if (!env?.DB?.prepare) return null;
+  return await env.DB.prepare(
+    "SELECT id, reason FROM blocked_slots WHERE pickup_date = ? AND (pickup_slot IS NULL OR pickup_slot = ?) AND removed_at IS NULL",
+  ).bind(dateString, slot).first();
+}
+
+const BLOCKED_SLOT_GUARD_SQL = `
+      AND NOT EXISTS (
+        SELECT 1 FROM blocked_slots
+        WHERE pickup_date = ? AND (pickup_slot IS NULL OR pickup_slot = ?) AND removed_at IS NULL
+      )`;
+
+function isPickupSlotAvailable(dateString, slot, leadMinutes = DEFAULT_BOOKING_LEAD_MINUTES, schedule) {
+  if (!isValidDate(dateString) || !isScheduledSlot(dateString, slot, schedule)) {
     return false;
   }
   const today = dateInKualaLumpur();
   if (dateString < today || dateString > addLocalDays(today, 6)) {
     return false;
   }
-  const pickupAt = Date.parse(`${dateString}T${slot}:00+08:00`);
-  return dateString !== today || Date.now() < pickupAt + 45 * 60 * 1000;
+  return Date.now() < Date.parse(`${dateString}T${slot}:00+08:00`) - leadMinutes * 60 * 1000;
 }
 
 function readyAtFor(dateString, slot, service, now = Date.now()) {
@@ -290,10 +351,226 @@ function formatReadyTime(value) {
   }).format(new Date(value));
 }
 
+const EMAIL_TRANSIENT_CODES = new Set([
+  "E_RATE_LIMIT_EXCEEDED",
+  "E_DAILY_LIMIT_EXCEEDED",
+  "E_INTERNAL_SERVER_ERROR",
+  "E_DELIVERY_FAILED",
+]);
+
+function escapeHtmlText(value) {
+  return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function senToRinggit(cents) {
+  return `RM${(Number(cents || 0) / 100).toFixed(2)}`;
+}
+
+function pickupDisplay(dateString, slot) {
+  return formatReadyTime(pickupStartAt(dateString, slot));
+}
+
+function bookingAlertLines(env, row) {
+  const extras = [row.hangers ? "hangers" : null, row.folding ? "folding" : null, row.ironing ? "ironing" : null].filter(Boolean);
+  const phoneDigits = String(row.phone || "").replace(/\D/g, "");
+  return [
+    `Pickup: ${pickupDisplay(row.pickup_date, row.pickup_slot)}`,
+    `Address: ${row.block}, Unit ${row.unit}, Edumetro, USJ 1`,
+    `Customer: ${row.customer_name} — ${row.phone}`,
+    `WhatsApp: https://wa.me/${phoneDigits}`,
+    `Service: ${row.package_size}-piece ${SERVICE_LABELS[row.service] || row.service}${extras.length ? ` + ${extras.join(", ")}` : ""}`,
+    `Total: ${senToRinggit(row.total_cents)} (${PAYMENT_LABELS[row.payment_method] || row.payment_method}, ${row.payment_status})`,
+    `Dashboard: https://${env.OPERATOR_HOST || "ops.lazylaundry.me"}/`,
+  ];
+}
+
+function buildOperatorAlert(env, kind, row, extra = {}) {
+  const pickup = pickupDisplay(row.pickup_date, row.pickup_slot);
+  const base = bookingAlertLines(env, row);
+  if (kind === "booking_created") {
+    return { subject: `New booking ${row.booking_number} — ${pickup}`, lines: [`Booking: ${row.booking_number}`, ...base] };
+  }
+  if (kind === "customer_cancelled") {
+    return {
+      subject: `Cancelled ${row.booking_number} — was ${pickup}`,
+      lines: [
+        `Booking: ${row.booking_number}`,
+        extra.late ? `Late cancellation: ${senToRinggit(extra.penaltyCents)} fee added` : "Cancelled inside the free window",
+        ...(extra.releasedFeeCents ? [`Returned outstanding fee: ${senToRinggit(extra.releasedFeeCents)}`] : []),
+        ...base,
+      ],
+    };
+  }
+  if (kind === "customer_rescheduled") {
+    return {
+      subject: `Rescheduled ${row.booking_number} → ${pickup}`,
+      lines: [`Booking: ${row.booking_number}`, `Was: ${pickupDisplay(extra.fromDate, extra.fromSlot)}`, ...base],
+    };
+  }
+  const changedFields = Array.isArray(extra.changedFields) && extra.changedFields.length ? extra.changedFields.join(", ") : "details";
+  return {
+    subject: `Edited ${row.booking_number} (${changedFields})`,
+    lines: [`Booking: ${row.booking_number}`, `Changed: ${changedFields}`, ...base],
+  };
+}
+
+function buildPickupReminderAlert(env, rows) {
+  return {
+    subject: `${rows.length} pickup${rows.length === 1 ? "" : "s"} due within 90 minutes`,
+    lines: [
+      "Bookings still Confirmed with pickup starting soon:",
+      ...rows.flatMap((row) => ["", `— ${row.booking_number} · ${pickupDisplay(row.pickup_date, row.pickup_slot)}`, ...bookingAlertLines(env, row)]),
+    ],
+  };
+}
+
+async function sendOperatorEmail(env, { kind, subject, lines, bookingNumber = null }) {
+  if (!env?.EMAIL?.send) return false;
+  const html = `<ul>${lines.map((line) => `<li>${escapeHtmlText(line)}</li>`).join("")}</ul>`;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await env.EMAIL.send({
+        from: { email: "alerts@lazylaundry.me", name: "Lazy Laundry" },
+        to: env.OPERATOR_ALERT_EMAIL ?? null,
+        subject,
+        text: lines.join("\n"),
+        html,
+      });
+      return true;
+    } catch (error) {
+      const code = error instanceof Error ? error.code || "unknown" : "unknown";
+      if (attempt === 0 && EMAIL_TRANSIENT_CODES.has(code)) {
+        await new Promise((resolve) => setTimeout(resolve, 700));
+        continue;
+      }
+      console.error(JSON.stringify({ event: "operator_alert_failed", kind, bookingNumber, code }));
+      return false;
+    }
+  }
+  return false;
+}
+
+function queueOperatorAlert(ctx, env, kind, row, extra = {}) {
+  try {
+    if (!env?.EMAIL?.send || !ctx?.waitUntil || !row) return;
+    const { subject, lines } = buildOperatorAlert(env, kind, row, extra);
+    ctx.waitUntil(sendOperatorEmail(env, { kind, subject, lines, bookingNumber: row.booking_number }));
+  } catch {
+    console.error(JSON.stringify({ event: "operator_alert_failed", kind, bookingNumber: row?.booking_number || null, code: "build_error" }));
+  }
+}
+
+const PICKUP_REMINDER_WINDOW_MS = 90 * 60 * 1000;
+const PICKUP_REMINDER_MIN_AGE_MS = 30 * 60 * 1000;
+
+async function runPickupReminders(env) {
+  if (!env?.EMAIL?.send || !env?.DB?.prepare) return;
+  const now = Date.now();
+  const result = await env.DB.prepare(`
+    SELECT * FROM bookings
+    WHERE status = 'confirmed' AND operator_reminded_at IS NULL AND created_at <= ?
+      AND datetime(pickup_date || 'T' || pickup_slot || ':00+08:00') <= datetime(?)
+    ORDER BY pickup_date, pickup_slot
+    LIMIT 50
+  `).bind(
+    new Date(now - PICKUP_REMINDER_MIN_AGE_MS).toISOString(),
+    new Date(now + PICKUP_REMINDER_WINDOW_MS).toISOString(),
+  ).all();
+  const rows = result?.results || [];
+  if (!rows.length) return;
+  const { subject, lines } = buildPickupReminderAlert(env, rows);
+  if (!await sendOperatorEmail(env, { kind: "pickup_reminder", subject, lines })) return;
+  const stamp = new Date(now).toISOString();
+  await env.DB.batch(rows.map((row) => env.DB.prepare(
+    "UPDATE bookings SET operator_reminded_at = ? WHERE id = ? AND operator_reminded_at IS NULL",
+  ).bind(stamp, row.id)));
+}
+
+// Privacy notice retention promise: customer identity is anonymized up to 24
+// months after a terminal booking, while order history (numbers, dates,
+// totals, status, audit skeleton) is kept. Customers with an outstanding
+// penalty balance are skipped — the notice excepts records needed for an
+// unresolved fee. Batches stay small so a backlog drains across cron runs.
+const RETENTION_MS = 730 * 24 * 60 * 60 * 1000;
+const RETENTION_BATCH_LIMIT = 25;
+const ANONYMIZED_NAME = "Former customer";
+const ANONYMIZED_FIELD = "removed";
+
+async function runRetentionPass(env, now = Date.now()) {
+  if (!env?.DB?.prepare) return { bookings: 0, customers: 0 };
+  const cutoff = new Date(now - RETENTION_MS).toISOString();
+  const stamp = new Date(now).toISOString();
+
+  const due = await env.DB.prepare(`
+    SELECT id, customer_id FROM bookings
+    WHERE customer_anonymized_at IS NULL
+      AND status IN ('delivered', 'cancelled')
+      AND updated_at <= ?
+      AND NOT EXISTS (
+        SELECT 1 FROM customers c
+        WHERE c.id = bookings.customer_id AND c.penalty_balance_cents > 0
+      )
+    ORDER BY updated_at
+    LIMIT ?
+  `).bind(cutoff, RETENTION_BATCH_LIMIT).all();
+  const bookings = due?.results || [];
+  if (bookings.length) {
+    const statements = [];
+    for (const row of bookings) {
+      statements.push(
+        env.DB.prepare(
+          "UPDATE bookings SET customer_name = ?, phone = ?, block = ?, unit = ?, customer_anonymized_at = ? WHERE id = ? AND customer_anonymized_at IS NULL",
+        ).bind(ANONYMIZED_NAME, ANONYMIZED_FIELD, ANONYMIZED_FIELD, ANONYMIZED_FIELD, stamp, row.id),
+        env.DB.prepare("UPDATE booking_audit_events SET details_json = NULL WHERE booking_id = ?").bind(row.id),
+        env.DB.prepare("DELETE FROM operator_notes WHERE booking_id = ?").bind(row.id),
+      );
+    }
+    await env.DB.batch(statements);
+  }
+
+  // A customer row may be anonymized once none of its bookings remain
+  // identifiable. The natural id (`customer-<digits>`) and phone are freed so
+  // a returning customer can register again; an anon-* replacement row keeps
+  // bookings/penalty_events/booking_audit_events referentially intact. Order:
+  // insert replacement parent, repoint children, delete the original.
+  const stale = await env.DB.prepare(`
+    SELECT id FROM customers c
+    WHERE c.anonymized_at IS NULL AND c.id NOT LIKE 'anon-%'
+      AND c.penalty_balance_cents = 0
+      AND NOT EXISTS (
+        SELECT 1 FROM bookings b WHERE b.customer_id = c.id AND b.customer_anonymized_at IS NULL
+      )
+    ORDER BY c.updated_at
+    LIMIT ?
+  `).bind(RETENTION_BATCH_LIMIT).all();
+  const customers = stale?.results || [];
+  if (customers.length) {
+    const statements = [];
+    for (const row of customers) {
+      statements.push(
+        env.DB.prepare(`
+          INSERT INTO customers (id, phone_e164, penalty_balance_cents, created_at, updated_at, anonymized_at)
+          SELECT 'anon-' || c.id, 'anon-' || substr(c.phone_e164, -11), c.penalty_balance_cents, c.created_at, ?, ?
+          FROM customers c WHERE c.id = ? AND c.anonymized_at IS NULL
+        `).bind(stamp, stamp, row.id),
+        env.DB.prepare("UPDATE bookings SET customer_id = 'anon-' || customer_id WHERE customer_id = ?").bind(row.id),
+        env.DB.prepare("UPDATE penalty_events SET customer_id = 'anon-' || customer_id, note = NULL WHERE customer_id = ?").bind(row.id),
+        env.DB.prepare("UPDATE booking_audit_events SET customer_id = 'anon-' || customer_id WHERE customer_id = ?").bind(row.id),
+        env.DB.prepare("DELETE FROM customers WHERE id = ?").bind(row.id),
+      );
+    }
+    await env.DB.batch(statements);
+  }
+
+  if (bookings.length || customers.length) {
+    console.log(JSON.stringify({ event: "retention_anonymized", bookings: bookings.length, customers: customers.length }));
+  }
+  return { bookings: bookings.length, customers: customers.length };
+}
+
 function priceInCents(packageSize, service, hangers) {
-  const base = packageSize === 10 ? 2999 : 5499;
-  const express = packageSize === 10 ? 1000 : 1500;
-  return base + (service === "express" ? express : 0) + (hangers ? 0 : 0);
+  const tier = PRICE_CENTS[packageSize] || PRICE_CENTS[18];
+  return tier.base + (service === "express" ? tier.express : 0) + (hangers ? tier.hanger : 0);
 }
 
 const PROMO_CODE_PATTERN = /^[A-Z0-9]{3,32}$/;
@@ -381,7 +658,7 @@ function validateBooking(input) {
   if (!UNIT_PREFIXES[block]?.includes(unitPrefix)) return null;
   if (![10, 18].includes(packageSize) || !["standard", "express"].includes(service)) return null;
   if (!["cash", "qr"].includes(paymentMethod) || input.termsAccepted !== true) return null;
-  if (!isValidDate(pickupDate) || !isScheduledSlot(pickupDate, pickupSlot)) return null;
+  if (!isValidDate(pickupDate) || typeof pickupSlot !== "string" || !/^([01]\d|2[0-3]):[0-5]\d$/.test(pickupSlot)) return null;
   const priceRevision = input.priceRevision === undefined ? "" : typeof input.priceRevision === "string" && input.priceRevision.length <= 80 ? input.priceRevision : null;
   const expectedTotalCents = input.expectedTotalCents === undefined ? null : Number.isInteger(input.expectedTotalCents) && input.expectedTotalCents >= 0 ? input.expectedTotalCents : null;
   if (priceRevision === null || expectedTotalCents === null && input.expectedTotalCents !== undefined) return null;
@@ -425,6 +702,12 @@ function canonicalize(value) {
     return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalize(value[key])}`).join(",")}}`;
   }
   return JSON.stringify(value);
+}
+
+const BOOKING_FINGERPRINT_FIELDS = ["name", "phone", "block", "unit", "packageSize", "service", "hangers", "pickupDate", "pickupSlot", "paymentMethod", "promoCode", "priceRevision", "expectedTotalCents"];
+
+function bookingFingerprint(booking) {
+  return canonicalize(Object.fromEntries(BOOKING_FINGERPRINT_FIELDS.map((field) => [field, booking[field]])));
 }
 
 function decodeBase64(value) {
@@ -516,7 +799,7 @@ async function replayIdempotentBooking(env, keyHash, payloadHash, cors) {
   const row = await env.DB.prepare("SELECT * FROM bookings WHERE idempotency_key_hash = ?").bind(keyHash).first();
   if (!row) return null;
   if (row.request_payload_hash !== payloadHash) {
-    return jsonResponse({ error: "This retry key was already used for a different booking" }, 409, cors);
+    return jsonResponse({ error: "This retry key was already used for a different booking", code: "idempotency_key_reused" }, 422, cors);
   }
   const trackingToken = await decryptTrackingToken(row.encrypted_tracking_token, env, `${row.id}:${row.booking_number}`);
   if (!trackingToken) {
@@ -526,9 +809,11 @@ async function replayIdempotentBooking(env, keyHash, payloadHash, cors) {
   return jsonResponse({ booking: bookingForClient(row), trackingToken }, 201, cors);
 }
 
-async function createBooking(request, env, cors) {
+async function createBooking(request, env, cors, ctx) {
   const limit = await enforceRateLimit(request, env, "booking");
   if (!limit.ok) return rateLimitFailure(limit, cors);
+  const postLimit = await enforceRateLimit(request, env, "booking_post", "RATE_LIMITER_BOOKING");
+  if (!postLimit.ok) return rateLimitFailure(postLimit, cors);
   if (!await verifyTurnstile(request, env, "booking")) {
     return jsonResponse({ error: "Verification failed" }, 403, cors);
   }
@@ -541,17 +826,30 @@ async function createBooking(request, env, cors) {
   if (!booking) {
     return jsonResponse({ error: "Booking details are invalid or the pickup slot is unavailable" }, 400, cors);
   }
-  const payloadHash = await sha256(canonicalize(booking));
+  const payloadHash = await sha256(bookingFingerprint(booking));
   const keyHash = await sha256(idempotencyKey);
   const replay = await replayIdempotentBooking(env, keyHash, payloadHash, cors);
   if (replay) return replay;
   if (env.PUBLIC_BOOKING_ENABLED !== "true") {
     return jsonResponse({ error: "Booking intake is not enabled" }, 503, cors);
   }
-  if (!isPickupSlotAvailable(booking.pickupDate, booking.pickupSlot)) {
-    return jsonResponse({ error: "The pickup slot is no longer available" }, 409, cors);
+  if (!isPickupSlotAvailable(booking.pickupDate, booking.pickupSlot, bookingLeadMinutes(env), scheduleFor(env))) {
+    return jsonResponse({ error: "The pickup slot is no longer available", code: "slot_unavailable" }, 409, cors);
+  }
+  if (await slotBlockFor(env, booking.pickupDate, booking.pickupSlot)) {
+    return jsonResponse({ error: "The pickup slot is no longer available", code: "slot_unavailable" }, 409, cors);
   }
   const customerId = customerIdForPhone(booking.phone);
+  const activeLimit = activeBookingLimit(env);
+  const activeCount = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM bookings WHERE phone = ? AND status IN ${ACTIVE_BOOKING_STATUSES}`,
+  ).bind(booking.phone).first();
+  if (Number(activeCount?.n) >= activeLimit) {
+    return jsonResponse({
+      error: `You already have ${activeLimit} active bookings. Wait for one to be completed or cancel it before booking again.`,
+      code: "active_booking_limit",
+    }, 409, cors);
+  }
   const existingCustomer = await env.DB.prepare("SELECT penalty_balance_cents FROM customers WHERE id = ?").bind(customerId).first();
   const feeTotalCents = Number(existingCustomer?.penalty_balance_cents) || 0;
   const createdAt = new Date().toISOString();
@@ -584,9 +882,6 @@ async function createBooking(request, env, cors) {
       ON CONFLICT(phone_e164) DO UPDATE SET updated_at = excluded.updated_at
     `).bind(customerId, booking.phone, feeTotalCents, createdAt, createdAt),
   ];
-  if (feeTotalCents > 0) {
-    statements.push(env.DB.prepare("UPDATE customers SET penalty_balance_cents = 0, updated_at = ? WHERE id = ? AND penalty_balance_cents = ? AND penalty_balance_cents > 0").bind(createdAt, customerId, feeTotalCents));
-  }
   const bookingStatement = env.DB.prepare(`
     INSERT INTO bookings (
       id, booking_number, tracking_token_hash, encrypted_tracking_token, tracking_token_key_version,
@@ -596,32 +891,45 @@ async function createBooking(request, env, cors) {
       status, ready_at, revision, terms_accepted, terms_accepted_at, terms_policy_version, created_at, updated_at
     )
     SELECT ?, ?, ?, ?, 'v1', ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, 1, 1, ?, ?, ?, ?
-    WHERE (? = 0 OR changes() = 1)
+    WHERE EXISTS (SELECT 1 FROM customers WHERE id = ? AND penalty_balance_cents = ?)
       AND (? IS NULL OR EXISTS (
         SELECT 1 FROM promotions WHERE code = ? AND active = 1
           AND (max_redemptions IS NULL OR redemptions < max_redemptions)
       ))
+      AND (SELECT COUNT(*) FROM bookings WHERE phone = ? AND status IN ${ACTIVE_BOOKING_STATUSES}) < ?${BLOCKED_SLOT_GUARD_SQL}
   `).bind(
     id, bookingNumber, trackingTokenHash, encryptedTrackingToken, keyHash, payloadHash, customerId,
     booking.name, booking.phone, booking.block, booking.unit, booking.packageSize, booking.service,
     booking.hangers ? 1 : 0, booking.pickupDate, booking.pickupSlot, booking.serviceTotalCents,
     feeTotalCents, totalCents, booking.paymentMethod, appliedPromo?.code || null, discountCents,
     booking.readyAt, createdAt, env.TERMS_POLICY_VERSION || "launch-v1", createdAt, createdAt,
-    feeTotalCents, appliedPromo?.code || null, appliedPromo?.code || null
+    customerId, feeTotalCents, appliedPromo?.code || null, appliedPromo?.code || null, booking.phone, activeLimit,
+    booking.pickupDate, booking.pickupSlot
   );
   statements.push(bookingStatement);
   const bookingResultIndex = statements.length - 1;
+  if (feeTotalCents > 0) {
+    statements.push(env.DB.prepare(`
+      UPDATE customers SET penalty_balance_cents = 0, updated_at = ?
+      WHERE id = ? AND penalty_balance_cents = ? AND penalty_balance_cents > 0
+        AND EXISTS (SELECT 1 FROM bookings WHERE id = ?)
+    `).bind(createdAt, customerId, feeTotalCents, id));
+  }
+  let promoResultIndex = -1;
   if (appliedPromo) {
+    promoResultIndex = statements.length;
     statements.push(env.DB.prepare(`
       UPDATE promotions SET redemptions = redemptions + 1, updated_at = ?
       WHERE code = ? AND active = 1 AND (max_redemptions IS NULL OR redemptions < max_redemptions)
-    `).bind(createdAt, appliedPromo.code));
+        AND EXISTS (SELECT 1 FROM bookings WHERE id = ?)
+    `).bind(createdAt, appliedPromo.code, id));
   }
   if (feeTotalCents > 0) {
     statements.push(env.DB.prepare(`
       UPDATE penalty_events SET state = 'allocated', allocated_booking_id = ?, updated_at = ?
-      WHERE customer_id = ? AND state = 'outstanding' AND changes() = 1
-    `).bind(id, createdAt, customerId));
+      WHERE customer_id = ? AND state = 'outstanding'
+        AND EXISTS (SELECT 1 FROM bookings WHERE id = ?)
+    `).bind(id, createdAt, customerId, id));
   }
   statements.push(env.DB.prepare(`
     INSERT INTO booking_events (id, booking_id, event_type, from_value, to_value, actor_id, created_at)
@@ -637,23 +945,46 @@ async function createBooking(request, env, cors) {
     const results = await env.DB.batch(statements);
     const bookingResult = results[bookingResultIndex];
     if (bookingResult?.meta?.changes !== 1) {
-      if (appliedPromo) return jsonResponse({ error: "That promo code is no longer available", code: "quote_changed" }, 409, cors);
-      if (feeTotalCents > 0) return jsonResponse({ error: "The fee balance changed; refresh checkout and try again" }, 409, cors);
+      const retry = await replayIdempotentBooking(env, keyHash, payloadHash, cors);
+      if (retry) return retry;
+      if (await slotBlockFor(env, booking.pickupDate, booking.pickupSlot)) {
+        return jsonResponse({ error: "The pickup slot is no longer available", code: "slot_unavailable" }, 409, cors);
+      }
+      const nowActive = await env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM bookings WHERE phone = ? AND status IN ${ACTIVE_BOOKING_STATUSES}`,
+      ).bind(booking.phone).first();
+      if (Number(nowActive?.n) >= activeLimit) {
+        return jsonResponse({
+          error: `You already have ${activeLimit} active bookings. Wait for one to be completed or cancel it before booking again.`,
+          code: "active_booking_limit",
+        }, 409, cors);
+      }
+      const currentCustomer = await env.DB.prepare("SELECT penalty_balance_cents FROM customers WHERE id = ?").bind(customerId).first();
+      if ((Number(currentCustomer?.penalty_balance_cents) || 0) !== feeTotalCents) {
+        return jsonResponse({ error: "The fee balance changed; refresh checkout and try again", code: "quote_changed" }, 409, cors);
+      }
+      if (appliedPromo) {
+        const currentPromo = await promoForCode(env, appliedPromo.code);
+        if (!currentPromo || promoEligibility(currentPromo, booking.serviceTotalCents, { forRedemption: true })) {
+          return jsonResponse({ error: "That promo code is no longer available", code: "quote_changed" }, 409, cors);
+        }
+      }
       throw new Error("Booking insert did not change a row");
     }
-    if (appliedPromo && results[bookingResultIndex + 1]?.meta?.changes !== 1) {
+    if (promoResultIndex >= 0 && results[promoResultIndex]?.meta?.changes !== 1) {
       console.error(JSON.stringify({ event: "promo_redemption_guard_mismatch", bookingId: id, code: appliedPromo.code }));
     }
     const row = await env.DB.prepare("SELECT * FROM bookings WHERE id = ?").bind(id).first();
+    queueOperatorAlert(ctx, env, "booking_created", row);
     return jsonResponse({ booking: bookingForClient(row), trackingToken }, 201, cors);
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
-    if (message.includes("bookings.pickup_date, bookings.pickup_slot")) {
-      return jsonResponse({ error: "That pickup slot has just been taken" }, 409, cors);
-    }
-    if (message.includes("bookings.idempotency_key_hash")) {
+    if (message.includes("UNIQUE constraint failed")) {
       const retry = await replayIdempotentBooking(env, keyHash, payloadHash, cors);
       if (retry) return retry;
+    }
+    if (message.includes("bookings.pickup_date, bookings.pickup_slot")) {
+      return jsonResponse({ error: "That pickup slot has just been taken", code: "slot_taken" }, 409, cors);
     }
     console.error(JSON.stringify({ event: "booking_create_failed", errorType: error instanceof Error ? error.name : "unknown" }));
     return jsonResponse({ error: "Booking could not be saved" }, 503, cors);
@@ -664,6 +995,9 @@ async function getPublicConfig(env, cors) {
   return jsonResponse({
     bookingEnabled: env.PUBLIC_BOOKING_ENABLED === "true",
     priceRevision: env.PRICE_REVISION || "launch-v1",
+    bookingLeadMinutes: bookingLeadMinutes(env),
+    weekdaySlots: scheduleFor(env).weekday,
+    weekendSlots: scheduleFor(env).weekend,
     turnstileSiteKey: typeof env.TURNSTILE_SITEKEY === "string" && env.TURNSTILE_SITEKEY ? env.TURNSTILE_SITEKEY : null,
   }, 200, cors);
 }
@@ -721,10 +1055,21 @@ async function getAvailability(request, env, cors) {
   if (!isValidDate(date) || date < dateInKualaLumpur() || date > addLocalDays(dateInKualaLumpur(), 6)) {
     return jsonResponse({ error: "Date is outside the booking window" }, 400, cors);
   }
-  const result = await env.DB.prepare(`
-    SELECT pickup_slot FROM bookings WHERE pickup_date = ? AND status <> 'cancelled'
-  `).bind(date).all();
-  return jsonResponse({ date, bookedSlots: result.results.map((row) => row.pickup_slot) }, 200, cors);
+  const [result, blocks] = await Promise.all([
+    env.DB.prepare(`
+      SELECT pickup_slot FROM bookings WHERE pickup_date = ? AND status <> 'cancelled'
+    `).bind(date).all(),
+    env.DB.prepare(`
+      SELECT pickup_slot FROM blocked_slots WHERE pickup_date = ? AND removed_at IS NULL
+    `).bind(date).all(),
+  ]);
+  const blockedRows = blocks?.results || [];
+  return jsonResponse({
+    date,
+    bookedSlots: result.results.map((row) => row.pickup_slot),
+    blockedSlots: blockedRows.map((row) => row.pickup_slot).filter(Boolean),
+    blockedDate: blockedRows.some((row) => row.pickup_slot === null),
+  }, 200, cors);
 }
 
 async function getTracking(request, env, cors) {
@@ -790,7 +1135,7 @@ function customerCancellationIsLate(row) {
   return Date.now() >= pickupStartAt(row.pickup_date, row.pickup_slot) - 10 * 60 * 1000;
 }
 
-async function cancelCustomerBooking(request, env, cors) {
+async function cancelCustomerBooking(request, env, cors, ctx) {
   const limit = await enforceRateLimit(request, env, "cancel");
   if (!limit.ok) return rateLimitFailure(limit, cors);
   if (!await verifyTurnstile(request, env, "cancel")) {
@@ -853,6 +1198,7 @@ async function cancelCustomerBooking(request, env, cors) {
       return jsonResponse({ error: "Booking changed; refresh and try again" }, 409, cors);
     }
     const row = await env.DB.prepare("SELECT * FROM bookings WHERE id = ?").bind(current.id).first();
+    queueOperatorAlert(ctx, env, "customer_cancelled", row, { late, penaltyCents: penaltyAmount, releasedFeeCents: releaseAmount });
     return jsonResponse({ booking: bookingForClient(row) }, 200, cors);
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
@@ -864,7 +1210,7 @@ async function cancelCustomerBooking(request, env, cors) {
   }
 }
 
-async function rescheduleCustomerBooking(request, env, cors) {
+async function rescheduleCustomerBooking(request, env, cors, ctx) {
   const limit = await enforceRateLimit(request, env, "reschedule");
   if (!limit.ok) return rateLimitFailure(limit, cors);
   if (!await verifyTurnstile(request, env, "reschedule")) {
@@ -878,26 +1224,31 @@ async function rescheduleCustomerBooking(request, env, cors) {
   if (customerCancellationIsLate(current)) return jsonResponse({ error: "Rescheduling is closed for this pickup" }, 409, cors);
   const pickupDate = typeof input?.pickupDate === "string" ? input.pickupDate : "";
   const pickupSlot = typeof input?.pickupSlot === "string" ? input.pickupSlot : "";
-  if (!isPickupSlotAvailable(pickupDate, pickupSlot)) return jsonResponse({ error: "The new pickup slot is unavailable" }, 409, cors);
+  if (!isPickupSlotAvailable(pickupDate, pickupSlot, bookingLeadMinutes(env), scheduleFor(env))) return jsonResponse({ error: "The new pickup slot is unavailable", code: "slot_unavailable" }, 409, cors);
+  if (await slotBlockFor(env, pickupDate, pickupSlot)) return jsonResponse({ error: "The new pickup slot is unavailable", code: "slot_unavailable" }, 409, cors);
   const now = new Date().toISOString();
   const auditId = crypto.randomUUID();
   try {
     const results = await env.DB.batch([
       env.DB.prepare(`
         UPDATE bookings SET pickup_date = ?, pickup_slot = ?, ready_at = ?, updated_at = ?, revision = revision + 1
-        WHERE id = ? AND revision = ? AND status NOT IN ('cancelled', 'delivered', 'laundry_picked_up', 'processing', 'ready')
-      `).bind(pickupDate, pickupSlot, readyAtFor(pickupDate, pickupSlot, current.service), now, current.id, current.revision),
+        WHERE id = ? AND revision = ? AND status NOT IN ('cancelled', 'delivered', 'laundry_picked_up', 'processing', 'ready')${BLOCKED_SLOT_GUARD_SQL}
+      `).bind(pickupDate, pickupSlot, readyAtFor(pickupDate, pickupSlot, current.service), now, current.id, current.revision, pickupDate, pickupSlot),
       env.DB.prepare(`
         INSERT INTO booking_audit_events (id, booking_id, customer_id, event_type, details_json, created_at)
         SELECT ?, ?, ?, 'customer_rescheduled', ?, ? WHERE changes() = 1
       `).bind(auditId, current.id, current.customer_id, JSON.stringify({ fromDate: current.pickup_date, fromSlot: current.pickup_slot, toDate: pickupDate, toSlot: pickupSlot }), now),
     ]);
-    if (results[0]?.meta?.changes !== 1) return jsonResponse({ error: "Booking changed; refresh and try again" }, 409, cors);
+    if (results[0]?.meta?.changes !== 1) {
+      if (await slotBlockFor(env, pickupDate, pickupSlot)) return jsonResponse({ error: "The new pickup slot is unavailable", code: "slot_unavailable" }, 409, cors);
+      return jsonResponse({ error: "Booking changed; refresh and try again" }, 409, cors);
+    }
     const row = await env.DB.prepare("SELECT * FROM bookings WHERE id = ?").bind(current.id).first();
+    queueOperatorAlert(ctx, env, "customer_rescheduled", row, { fromDate: current.pickup_date, fromSlot: current.pickup_slot });
     return jsonResponse({ booking: bookingForClient(row) }, 200, cors);
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
-    if (message.includes("bookings.pickup_date, bookings.pickup_slot")) return jsonResponse({ error: "That pickup slot has just been taken" }, 409, cors);
+    if (message.includes("bookings.pickup_date, bookings.pickup_slot")) return jsonResponse({ error: "That pickup slot has just been taken", code: "slot_taken" }, 409, cors);
     console.error(JSON.stringify({ event: "customer_reschedule_failed", errorType: error instanceof Error ? error.name : "unknown" }));
     return jsonResponse({ error: "Rescheduling could not be saved" }, 503, cors);
   }
@@ -932,7 +1283,7 @@ function customerEditView(row, late) {
   };
 }
 
-async function editCustomerBooking(request, env, cors) {
+async function editCustomerBooking(request, env, cors, ctx) {
   const limit = await enforceRateLimit(request, env, "edit");
   if (!limit.ok) return rateLimitFailure(limit, cors);
   if (!await verifyTurnstile(request, env, "edit")) {
@@ -1027,6 +1378,7 @@ async function editCustomerBooking(request, env, cors) {
         p.active AS promo_active, p.starts_at AS promo_starts_at, p.ends_at AS promo_ends_at
       FROM bookings b LEFT JOIN promotions p ON p.code = b.promo_code WHERE b.id = ?
     `).bind(current.id).first();
+    queueOperatorAlert(ctx, env, "customer_booking_edited", row, { changedFields });
     return jsonResponse({ booking: customerEditView(row) }, 200, cors);
   } catch (error) {
     console.error(JSON.stringify({ event: "customer_edit_failed", errorType: error instanceof Error ? error.name : "unknown" }));
@@ -1250,6 +1602,8 @@ async function getOperatorBookings(request, env, cors) {
       collected: Number(summary?.collected_cents) / 100 || 0,
     },
     page: { offset, limit, total, hasMore: offset + result.results.length < total && offset + limit < total },
+    weekdaySlots: scheduleFor(env).weekday,
+    weekendSlots: scheduleFor(env).weekend,
   }, 200, cors, { operator: true });
 }
 
@@ -1444,7 +1798,7 @@ async function updateOperatorBooking(request, env, id, actor, cors) {
     }
     const pickupDate = typeof input.pickupDate === "string" && input.pickupDate ? input.pickupDate : current.pickup_date;
     const pickupSlot = typeof input.pickupSlot === "string" && input.pickupSlot ? input.pickupSlot : current.pickup_slot;
-    if (!isPickupSlotAvailable(pickupDate, pickupSlot)) {
+    if (!isPickupSlotAvailable(pickupDate, pickupSlot, 0, scheduleFor(env))) {
       return jsonResponse({ error: "The pickup slot is no longer available" }, 409, cors);
     }
     statements = [
@@ -1491,10 +1845,10 @@ async function updateOperatorBooking(request, env, id, actor, cors) {
       || !UNIT_PREFIXES[merged.block]?.includes(merged.unit.slice(0, 1).toUpperCase())
       || ![10, 18].includes(merged.packageSize) || !["standard", "express"].includes(merged.service)
       || !["cash", "qr"].includes(merged.paymentMethod)
-      || (slotChanged && (!isValidDate(merged.pickupDate) || !isScheduledSlot(merged.pickupDate, merged.pickupSlot)))) {
+      || (slotChanged && (!isValidDate(merged.pickupDate) || !isScheduledSlot(merged.pickupDate, merged.pickupSlot, scheduleFor(env))))) {
       return jsonResponse({ error: "Invalid edit fields" }, 400, cors);
     }
-    if (slotChanged && !isPickupSlotAvailable(merged.pickupDate, merged.pickupSlot)) {
+    if (slotChanged && !isPickupSlotAvailable(merged.pickupDate, merged.pickupSlot, 0, scheduleFor(env))) {
       return jsonResponse({ error: "The pickup slot is no longer available" }, 409, cors);
     }
     const serviceChanged = merged.packageSize !== current.package_size || merged.service !== current.service || merged.hangers !== Boolean(current.hangers);
@@ -1565,7 +1919,7 @@ async function updateOperatorBooking(request, env, id, actor, cors) {
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
     if (message.includes("bookings.pickup_date, bookings.pickup_slot")) {
-      return jsonResponse({ error: "That pickup slot has just been taken" }, 409, cors);
+      return jsonResponse({ error: "That pickup slot has just been taken", code: "slot_taken" }, 409, cors);
     }
     console.error(JSON.stringify({ event: "operator_update_failed", errorType: error instanceof Error ? error.name : "unknown" }));
     return jsonResponse({ error: "Update could not be saved" }, 503, cors);
@@ -1957,10 +2311,155 @@ async function requireOperator(request, env, cors) {
   return { email: auth.email };
 }
 
-export { canonicalize, csvCell, customerCancellationIsLate, isPickupSlotAvailable, isScheduledSlot, isValidDate, makeTrackingToken, normalizePromoCode, priceInCents, promoDiscountCents, promoEligibility, promoStoredValue };
+function blockedSlotForClient(row) {
+  return {
+    id: row.id,
+    pickupDate: row.pickup_date,
+    pickupSlot: row.pickup_slot,
+    reason: row.reason || "",
+    createdBy: row.created_by ?? null,
+    createdAt: row.created_at,
+    revision: row.revision,
+    affectedBookings: Number.isSafeInteger(Number(row.affected_bookings)) ? Math.max(0, Number(row.affected_bookings)) : 0,
+  };
+}
+
+function capacityPagination(request) {
+  const url = new URL(request.url);
+  const limitValue = url.searchParams.get("limit");
+  const offsetValue = url.searchParams.get("offset");
+  const limit = limitValue === null ? 100 : Number(limitValue);
+  const offset = offsetValue === null ? 0 : Number(offsetValue);
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100
+    || !Number.isSafeInteger(offset) || offset < 0 || offset > 1000000) return null;
+  return { limit, offset };
+}
+
+async function getOperatorBlockedSlots(request, env, cors) {
+  const page = capacityPagination(request);
+  if (!page) return jsonResponse({ error: "Invalid capacity pagination" }, 400, cors, { operator: true });
+  const result = await env.DB.prepare(`
+    SELECT id, pickup_date, pickup_slot, reason, created_by, created_at, revision,
+      (SELECT COUNT(*) FROM bookings
+        WHERE bookings.pickup_date = blocked_slots.pickup_date
+          AND bookings.status NOT IN ('cancelled', 'delivered')
+          AND (blocked_slots.pickup_slot IS NULL OR bookings.pickup_slot = blocked_slots.pickup_slot)
+      ) AS affected_bookings
+    FROM blocked_slots
+    WHERE removed_at IS NULL AND pickup_date >= ?
+    ORDER BY pickup_date, coalesce(pickup_slot, ''), id LIMIT ? OFFSET ?
+  `).bind(dateInKualaLumpur(), page.limit + 1, page.offset).all();
+  const rows = result?.results || [];
+  return jsonResponse({
+    blocks: rows.slice(0, page.limit).map(blockedSlotForClient),
+    page: { ...page, hasMore: rows.length > page.limit },
+    weekdaySlots: scheduleFor(env).weekday,
+    weekendSlots: scheduleFor(env).weekend,
+  }, 200, cors);
+}
+
+async function createOperatorBlockedSlot(request, env, actor, cors) {
+  const input = await readJson(request);
+  const allowed = new Set(["pickupDate", "pickupSlot", "reason"]);
+  if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).some((key) => !allowed.has(key))) {
+    return jsonResponse({ error: "Invalid capacity block" }, 400, cors);
+  }
+  const pickupDate = typeof input.pickupDate === "string" ? input.pickupDate : "";
+  const pickupSlot = input.pickupSlot === undefined || input.pickupSlot === null
+    ? null
+    : typeof input.pickupSlot === "string" ? input.pickupSlot : undefined;
+  const reasonValue = input.reason === undefined ? "" : input.reason;
+  if (pickupSlot === undefined || typeof reasonValue !== "string") {
+    return jsonResponse({ error: "Invalid capacity block" }, 400, cors);
+  }
+  const reason = reasonValue.trim();
+  if (reason.length > 120) return jsonResponse({ error: "Reason must be 120 characters or fewer" }, 400, cors);
+  const today = dateInKualaLumpur();
+  const schedule = scheduleFor(env);
+  if (!isValidDate(pickupDate) || pickupDate < today) {
+    return jsonResponse({ error: "A valid future pickup date is required" }, 400, cors);
+  }
+  if (pickupSlot !== null && !isScheduledSlot(pickupDate, pickupSlot, schedule)) {
+    return jsonResponse({ error: "That slot is not part of the pickup schedule" }, 400, cors);
+  }
+  if (pickupDate === today) {
+    const weekday = new Date(`${pickupDate}T12:00:00+08:00`).getUTCDay();
+    const daySlots = weekday === 0 || weekday === 6 ? schedule.weekend : schedule.weekday;
+    const hasUnstartedSlot = daySlots.some((slot) => Date.now() < pickupStartAt(pickupDate, slot));
+    if (pickupSlot !== null && Date.now() >= pickupStartAt(pickupDate, pickupSlot) || pickupSlot === null && !hasUnstartedSlot) {
+      return jsonResponse({ error: "A pickup block must be scheduled before its slot starts" }, 400, cors);
+    }
+  }
+  const id = crypto.randomUUID();
+  const eventId = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const statements = [
+    env.DB.prepare(`
+      INSERT INTO blocked_slots (id, pickup_date, pickup_slot, reason, created_by, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).bind(id, pickupDate, pickupSlot, reason || null, actor || null, now),
+    env.DB.prepare(`
+      INSERT INTO capacity_events (id, block_id, event_type, actor_id, reason, revision, created_at)
+      VALUES (?, ?, 'created', ?, ?, 1, ?)
+    `).bind(eventId, id, actor || null, reason || null, now),
+    env.DB.prepare(`
+      SELECT COUNT(*) AS n FROM bookings
+      WHERE pickup_date = ? AND status NOT IN ('cancelled', 'delivered')
+        AND (? IS NULL OR pickup_slot = ?)
+    `).bind(pickupDate, pickupSlot, pickupSlot),
+  ];
+  let results;
+  try {
+    results = await env.DB.batch(statements);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (message.includes("UNIQUE constraint failed")) {
+      return jsonResponse({ error: "That pickup slot is already blocked", code: "already_blocked" }, 409, cors);
+    }
+    throw error;
+  }
+  const affectedBookings = Number(results[2]?.results?.[0]?.n) || 0;
+  const block = { id, pickupDate, pickupSlot, reason, createdBy: actor || null, createdAt: now, revision: 1 };
+  console.log(JSON.stringify({ event: "blocked_slot_created", pickupDate, pickupSlot, affectedBookings, actor }));
+  return jsonResponse({ block, affectedBookings }, 201, cors);
+}
+
+async function deleteOperatorBlockedSlot(request, env, id, actor, cors) {
+  const input = await readJson(request);
+  if (!input || typeof input !== "object" || Array.isArray(input)
+    || Object.keys(input).some((key) => key !== "revision")
+    || !Number.isSafeInteger(input.revision) || input.revision < 1) {
+    return jsonResponse({ error: "A positive block revision is required" }, 400, cors);
+  }
+  const row = await env.DB.prepare("SELECT id, revision, removed_at FROM blocked_slots WHERE id = ?").bind(id).first();
+  if (!row) return jsonResponse({ error: "Block not found" }, 404, cors);
+  if (row.removed_at !== null || row.revision !== input.revision) {
+    return jsonResponse({ error: "This capacity block changed; refresh the list", code: "stale_revision" }, 409, cors);
+  }
+  const now = new Date().toISOString();
+  const eventId = crypto.randomUUID();
+  const nextRevision = input.revision + 1;
+  const results = await env.DB.batch([
+    env.DB.prepare(`
+      UPDATE blocked_slots SET removed_at = ?, removed_by = ?, revision = revision + 1
+      WHERE id = ? AND revision = ? AND removed_at IS NULL
+    `).bind(now, actor, id, input.revision),
+    env.DB.prepare(`
+      INSERT INTO capacity_events (id, block_id, event_type, actor_id, reason, revision, created_at)
+      SELECT ?, ?, 'removed', ?, NULL, ?, ? WHERE changes() = 1
+    `).bind(eventId, id, actor, nextRevision, now),
+  ]);
+  if (results[0]?.meta?.changes !== 1) {
+    return jsonResponse({ error: "This capacity block changed; refresh the list", code: "stale_revision" }, 409, cors);
+  }
+  console.log(JSON.stringify({ event: "blocked_slot_removed", blockId: id, actor }));
+  return jsonResponse({ ok: true }, 200, cors);
+}
+
+export { bookingFingerprint, bookingLeadMinutes, canonicalize, csvCell, customerCancellationIsLate, isPickupSlotAvailable, isScheduledSlot, isValidDate, makeTrackingToken, normalizePromoCode, priceInCents, promoDiscountCents, promoEligibility, promoStoredValue, scheduleFor };
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const role = hostRole(request, env);
     if (!role) return jsonResponse({ error: "Not found" }, 404);
@@ -2020,7 +2519,7 @@ export default {
 
     if (request.method === "POST" && url.pathname === "/api/bookings") {
       try {
-        return await createBooking(request, env, cors || {});
+        return await createBooking(request, env, cors || {}, ctx);
       } catch {
         console.error(JSON.stringify({ event: "booking_create_failed", errorType: "unexpected" }));
         return jsonResponse({ error: "Booking could not be saved" }, 503, cors || {});
@@ -2041,10 +2540,10 @@ export default {
       try {
         const mutation = customerMutationMatch[2].toLowerCase();
         return mutation === "cancel"
-          ? await cancelCustomerBooking(request, env, cors || {})
+          ? await cancelCustomerBooking(request, env, cors || {}, ctx)
           : mutation === "reschedule"
-            ? await rescheduleCustomerBooking(request, env, cors || {})
-            : await editCustomerBooking(request, env, cors || {});
+            ? await rescheduleCustomerBooking(request, env, cors || {}, ctx)
+            : await editCustomerBooking(request, env, cors || {}, ctx);
       } catch {
         console.error(JSON.stringify({ event: "customer_booking_mutation_failed" }));
         return jsonResponse({ error: "Booking update could not be saved" }, 503, cors || {});
@@ -2081,6 +2580,16 @@ export default {
         if (request.method === "POST" && url.pathname === "/api/operator/promotions") {
           return await createOperatorPromotion(request, env, operator.email, cors || {});
         }
+        if (request.method === "GET" && url.pathname === "/api/operator/blocked-slots") {
+          return await getOperatorBlockedSlots(request, env, cors || {});
+        }
+        if (request.method === "POST" && url.pathname === "/api/operator/blocked-slots") {
+          return await createOperatorBlockedSlot(request, env, operator.email, cors || {});
+        }
+        const blockedMatch = url.pathname.match(/^\/api\/operator\/blocked-slots\/([0-9a-f-]{36})$/i);
+        if (blockedMatch && request.method === "DELETE") {
+          return await deleteOperatorBlockedSlot(request, env, blockedMatch[1], operator.email, cors || {});
+        }
         const promoMatch = url.pathname.match(/^\/api\/operator\/promotions\/([0-9a-f-]{36})$/i);
         if (promoMatch && request.method === "PATCH") {
           return await updateOperatorPromotion(request, env, promoMatch[1], operator.email, cors || {});
@@ -2099,5 +2608,13 @@ export default {
     }
 
     return jsonResponse({ error: "Not found" }, 404, cors || {});
+  },
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(runPickupReminders(env).catch((error) => {
+      console.error(JSON.stringify({ event: "pickup_reminder_failed", errorType: error instanceof Error ? error.name : "unknown" }));
+    }));
+    ctx.waitUntil(runRetentionPass(env).catch((error) => {
+      console.error(JSON.stringify({ event: "retention_pass_failed", errorType: error instanceof Error ? error.name : "unknown" }));
+    }));
   },
 };

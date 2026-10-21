@@ -10,3 +10,6 @@ coverage/
 public/shared/variants.js
 public/booking/app.js
 public/operator/app.js
+
+# release evidence bundles
+evidence/

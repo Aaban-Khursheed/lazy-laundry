@@ -10,28 +10,50 @@ Host role is derived from the request hostname; any other host (including
 `*.workers.dev`) gets a 404. Asset prefixes are enforced per role — operator
 assets are never served on customer hosts.
 
+Full system internals — request pipeline, data model, security model,
+failure-mode contract, decision records: **`docs/ARCHITECTURE.md`**.
+Day-to-day operation, alerts, emergency stop, deploy/rollback, restore drill:
+**`docs/OPERATIONS.md`**. Maintainer handoff record: **`docs/HANDOFF.md`**.
+
+## Maintenance
+
+Day-to-day maintenance moved to the incoming maintainer on 2026-10-21
+(role-based record; see `docs/HANDOFF.md` for the access checklist and
+standing orders). The canonical repository is unchanged:
+`Aaban-Khursheed/lazy-laundry`, worked via collaborator access.
+
 ## Commands
 
 | Command | Purpose |
 |---|---|
-| `npm run dev` | `wrangler dev --env local`, local D1 only, `http://localhost:8787` |
-| `npm run lint` / `npm run test` | ESLint + vitest unit tests |
+| `npm run dev` | `wrangler dev --env local`, local D1 only, `http://localhost:8787` (any loopback port works — `--port N` needs no CORS config) |
+| `npm run lint` / `npm run test` | ESLint (js+mjs, `no-undef`/`no-unused-vars` enforced) + vitest unit tests |
 | `npm run test:e2e` | Playwright against the local worker |
+| `npm run test:infra` | isolated workerd + disposable D1 health gates (`testing/`) |
+| `npm run test:integration` | real-D1 integration tests via the harness (`testing/integration/`) |
+| `npm run db:check` | migration guardrail: ordering + destructive-statement review gate |
 | `npm run deploy:dry-run` | build + lint + test, then `wrangler deploy --dry-run` |
 | `npm run deploy` | build + lint + test, then production deploy |
 | `npm run build:ui` | bundle `src/{booking,operator}/app.js` → minified `public/{booking,operator}/app.js` (auto-runs before dev/test/deploy) |
 
+Local `env.local` binds the same `RATE_LIMITER` (100/min) and
+`RATE_LIMITER_BOOKING` (5/min) limiters as production — real 429s are
+enforced by in-memory workerd limiters. Automated callers must send a
+distinct `X-Forwarded-For` per test/client to avoid sharing a bucket.
+
 ## Configuration inventory
 
 **Vars** (in `wrangler.jsonc`, safe to commit):
-`ENVIRONMENT`, `PUBLIC_BOOKING_ENABLED`, `PRICE_REVISION`, `TURNSTILE_SITEKEY`,
+`ENVIRONMENT`, `PUBLIC_BOOKING_ENABLED`, `PRICE_REVISION`, `BOOKING_LEAD_MINUTES`, `TURNSTILE_SITEKEY`,
 `CUSTOMER_HOSTS`, `TURNSTILE_HOSTNAMES`, `OPERATOR_HOST`,
-`OPERATOR_ALLOWED_EMAILS`, `SERVICE_TIMEZONE`.
+`OPERATOR_ALLOWED_EMAILS`, `OPERATOR_ALERT_EMAIL`, `SERVICE_TIMEZONE`.
 
-**Optional vars:** `TERMS_POLICY_VERSION` (defaults to `launch-v1`) — bump it
-with each legal-page revision so `terms_accepted_at`/`terms_policy_version`
-records stay meaningful. `CUSTOMER_ORIGIN`, `OPERATOR_ORIGIN` extend CORS
-origins if ever needed.
+`BOOKING_LEAD_MINUTES` (default 60) is the minimum notice before pickup for customer bookings and reschedules; the operator may schedule any slot that has not started.
+
+`TERMS_POLICY_VERSION` is currently `launch-v2` — bump it with each legal-page
+revision so `terms_accepted_at`/`terms_policy_version` records stay
+meaningful. `CUSTOMER_ORIGIN`, `OPERATOR_ORIGIN` extend CORS origins if ever
+needed.
 
 **Secrets** (set via `wrangler secret put`, never committed):
 
@@ -57,14 +79,47 @@ fail-closed by design. `OPERATOR_ALLOWED_EMAILS` is a var, not a secret.
 5. Local dev bypass: `ENVIRONMENT=local` + `X-Local-Operator-Email` header
    matching `LOCAL_OPERATOR_EMAIL`. Never accepted in production.
 
+## Operator alerts
+
+The Worker emails the operator on every customer-side change — booking
+created, cancelled, rescheduled, edited — via the `send_email` binding
+(`EMAIL`). The binding is pinned with `destination_address` to the operator
+inbox, so the Worker can only ever send to that one address.
+`OPERATOR_ALERT_EMAIL` supplies the recipient for `send()`; keep it equal to
+the binding's `destination_address`.
+
+- **Instant alerts** are sent inside `ctx.waitUntil` after the booking write
+  commits — never on idempotent replay. A failed send logs
+  `operator_alert_failed` (booking number + error code, no PII) and never
+  changes the customer response. Transient codes retry once after ~0.7s.
+- **Pickup reminders**: a `*/15 * * * *` cron emails a digest of `confirmed`
+  bookings starting within 90 minutes (and at least 30 minutes old, so a
+  last-minute booking doesn't double-notify). `operator_reminded_at` marks
+  each booking so it appears in exactly one digest — the safety net for
+  bookings made many hours before pickup.
+- Alert emails include the address, phone, and `wa.me` link the operator
+  needs to act. They never include tracking tokens.
+- **Setup (owner):** onboard `lazylaundry.me` to Email Sending in the
+  Cloudflare dashboard (adds SPF/DKIM automatically). Until then sends fail
+  with a logged `E_SENDER_*` code and bookings are unaffected. If sends fail
+  with `E_RECIPIENT_NOT_ALLOWED`, add/verify the destination address under
+  Email Routing → Destination addresses.
+- Local dev simulates the binding: sends are logged by Wrangler and written
+  under `.wrangler/tmp/email/`; nothing is delivered. Trigger the reminder
+  cron locally with `curl http://localhost:8787/cdn-cgi/local/scheduled`.
+
 ## Database
 
 D1 `lazylaundry-db` (prod) / `lazy-laundry-local` (dev). Migrations in
-`api/migrations/` are **additive and not undone by Worker rollback**.
+`api/migrations/` are **applied once and never undone by Worker rollback** —
+append new files only, never edit an applied migration. `npm run db:check`
+enforces filename ordering, flags destructive statements (`DROP`, `RENAME`,
+`DELETE`, `UPDATE`, `REPLACE INTO`) in unreviewed migrations, and verifies the
+`migrations_dir` config.
 
 ```bash
-wrangler d1 migrations apply lazylaundry-db            # production (after review)
-wrangler d1 migrations apply lazy-laundry-local --local  # local
+wrangler d1 migrations apply lazylaundry-db                      # production (after review)
+wrangler d1 migrations apply lazy-laundry-local --local --env local  # local
 ```
 
 A Worker rollback restores code only — already-applied migrations stay. Review
@@ -90,13 +145,18 @@ Structured `console.error` events worth alerting on / grepping in Logs:
 `booking_create_failed`, `promo_redemption_guard_mismatch`,
 `d1_health_check_failed`, `tracking_token_replay_unavailable`,
 `availability_lookup_failed`, `estimate_failed`, `tracking_lookup_failed`,
-`customer_booking_mutation_failed`, `operator_request_failed`.
+`customer_booking_mutation_failed`, `operator_request_failed`,
+`operator_alert_failed`, `pickup_reminder_failed`.
 
 ## Standing decisions
 
-- **`PUBLIC_BOOKING_ENABLED` stays `"false"` in committed config.** Flipping it
-  is the final act of launch — after legal, Access, Turnstile, and D1 gates in
-  `AGENTS.md` pass — not a standing state.
+- **Public intake is open (owner decision, 2026-10-19).** `PUBLIC_BOOKING_ENABLED`
+  is committed as `"true"` so the repo matches production and a routine deploy
+  can never silently close bookings; `tests/config.test.js` enforces this.
+  It is the emergency stop: from a clean checkout of `main` run
+  `npx wrangler deploy --var PUBLIC_BOOKING_ENABLED:false --message "emergency stop"`,
+  then commit the flag change (and update the config test) so the next deploy
+  does not reopen intake.
 - **`/api/estimate` discloses outstanding penalty fees for a phone number**
   without identity proof. Accepted: the fee must be shown before the customer
   commits, the endpoint is Turnstile-gated and rate-limited, and phone numbers
@@ -107,6 +167,42 @@ Structured `console.error` events worth alerting on / grepping in Logs:
   tokens (idempotent replays can't re-show the private link; tracking by hash
   still works). To rotate cleanly: keep old key under its version for decrypt,
   mint new for encrypt — implement before it's needed.
+- **Express turnaround stays 6 hours, including overnight (owner decision,
+  2026-10-20).** A 21:00 express pickup shows a ~03:00 ready time on tracking.
+  The operator confirmed overnight processing is real; `readyAtFor` and its
+  test pin the contract (express 6h, standard 12h or 15h for evening
+  pickups). Change it only with an owner decision — the tracking page shows
+  this time as a commitment.
+- **Active bookings are capped at 2 per phone number.** `ACTIVE_BOOKING_LIMIT`
+  is enforced twice: a pre-check for the friendly error, and a `COUNT(*)`
+  guard inside the insert transaction so concurrent requests can't exceed it.
+  Only `confirmed`→`ready` statuses count — cancelled and delivered free the
+  slot. `POST /api/bookings` also gets its own stricter rate limiter
+  (`RATE_LIMITER_BOOKING`, 5/min/IP) on top of the general one. Raise the cap
+  by changing the var, not the code — it is deliberately a var so a real
+  customer who needs a third concurrent booking can be accommodated quickly.
+- **The operator can block a pickup date or a single slot** from the
+  dashboard's Capacity view (`blocked_slots` table; `pickup_slot` NULL blocks
+  the whole date). Blocks hide slots in `/api/availability` (`blockedSlots` /
+  `blockedDate`), reject customer bookings and reschedules with 409
+  `slot_unavailable`, and a `NOT EXISTS` guard inside the booking insert and
+  reschedule update transactions means a block set mid-race still wins.
+  Existing bookings are never cancelled by a block — the create response
+  reports `affectedBookings` so the operator can handle them. Operator-side
+  scheduling is intentionally unaffected. The weekly slot pattern itself is
+  config: `PICKUP_SLOTS_WEEKDAY` / `PICKUP_SLOTS_WEEKEND` (comma-separated
+  `HH:MM`, deployed as vars, served to clients via `/api/config` and the
+  operator block list).
+- **Customer PII is anonymized 24 months after a booking reaches a terminal
+  state** (the privacy notice's published window). The `*/15` cron runs
+  `runRetentionPass`: name/phone/block/unit become sentinels, audit
+  `details_json` and `operator_notes` (free text) are cleared, and
+  fully-anonymized customers are replaced by `anon-` rows so a returning
+  phone can re-book. Customers with an outstanding penalty balance are
+  skipped — the notice excepts records needed for an unresolved fee. Order
+  history and money fields are kept. It is irreversible by design; if the
+  business later needs to reach old customers, change the retention window,
+  not the mechanism.
 - **`workers_dev` stays enabled** — `hostRole` 404s it, so it serves nothing;
   kept for preview/dry-run convenience.
 - **HSTS is `max-age=15552000; includeSubDomains`** — consider `preload` only

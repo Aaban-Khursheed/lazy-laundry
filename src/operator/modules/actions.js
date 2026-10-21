@@ -65,6 +65,32 @@ export async function savePromotion(fields, editing = null) {
   });
 }
 
+export async function createBlockedSlot({ pickupDate, pickupSlot, reason }) {
+  const result = await apiRequest("/api/operator/blocked-slots", {
+    method: "POST", credentials: "include", timeoutMs: 15000,
+    body: { pickupDate, pickupSlot: pickupSlot || null, reason: reason || "" },
+  });
+  return validateMutation(() => {
+    if (!result?.block || typeof result.block.id !== "string") {
+      throw new Error("The operator API returned an invalid blocked-slot response.");
+    }
+    return result;
+  });
+}
+
+export async function deleteBlockedSlot(id, revision) {
+  if (!Number.isSafeInteger(revision) || revision < 1) {
+    throw new Error("This capacity block has no current revision. Refresh the list before removing it.");
+  }
+  const result = await apiRequest(`/api/operator/blocked-slots/${encodeURIComponent(id)}`, {
+    method: "DELETE", credentials: "include", timeoutMs: 15000, body: { revision },
+  });
+  return validateMutation(() => {
+    if (result?.ok !== true) throw new Error("The operator API returned an invalid response.");
+    return result;
+  });
+}
+
 export async function exportOperatorBookings(status, signal, date = "") {
   const controller = new AbortController();
   const abort = () => controller.abort();

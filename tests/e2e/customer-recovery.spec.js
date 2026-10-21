@@ -164,6 +164,33 @@ test("lost response retries exactly the original key and body even after quote a
   expect(await page.evaluate(() => ({ local: localStorage.length, session: sessionStorage.length }))).toEqual({ local: 0, session: 0 });
 });
 
+test("a retry rejected as idempotency_key_reused keeps the booking protected instead of offering a new slot", async ({ page }) => {
+  const calls = await fixtures(page, {
+    booking: (route, count) => count === 1
+      ? route.abort("failed")
+      : route.fulfill({ status: 422, json: { code: "idempotency_key_reused", error: "This retry key was already used for a different booking" } }),
+  });
+  await checkout(page);
+  const slot = await page.locator("#pickup-slot").inputValue();
+  await page.locator('#booking-form [type="submit"]').click();
+  await expect(page.locator("#form-error")).toContainText(/confirmation could not be verified/i);
+  await page.locator('#booking-form [type="submit"]').click();
+  await expect(page.locator("#form-error")).toContainText(/contact Lazy Laundry/i);
+  await expect(page.locator("#pickup-slot")).toHaveValue(slot);
+  await expect(page.locator("#booking-recovery-reset")).toBeVisible();
+  expect(calls.bookings).toHaveLength(2);
+  expect(calls.bookings[1]).toEqual(calls.bookings[0]);
+});
+
+test("a slot_taken conflict asks for another slot and keeps the customer's details", async ({ page }) => {
+  await fixtures(page, { booking: (route) => route.fulfill({ status: 409, json: { code: "slot_taken", error: "That pickup slot has just been taken" } }) });
+  await checkout(page);
+  await page.locator('#booking-form [type="submit"]').click();
+  await expect(page.locator("#form-error")).toContainText(/choose an available pickup slot/i);
+  await expect(page.locator("#pickup-slot")).toHaveValue("");
+  await expect(page.locator("#customer-name")).toHaveValue("Synthetic Customer");
+});
+
 test("config failure blocks intake but not tracking and has an explicit working retry", async ({ page }) => {
   let available = false;
   await fixtures(page, { config: (route) => available ? route.fulfill({ json: { bookingEnabled: true, turnstileSiteKey: "" } }) : route.fulfill({ status: 503, json: { error: "Config unavailable" } }) });
@@ -413,7 +440,7 @@ test("late availability responses cannot replace choices for a newly selected da
 });
 
 test("closed same-day reschedule slots are omitted and rollover refreshes the chooser", async ({ page }) => {
-  await page.clock.install({ time: new Date("2026-10-04T12:50:00Z") });
+  await page.clock.install({ time: new Date("2026-10-04T11:50:00Z") });
   await fixtures(page);
   await lookup(page);
   await verifyPhone(page, "reschedule");
@@ -426,6 +453,18 @@ test("closed same-day reschedule slots are omitted and rollover refreshes the ch
   await expect(page.locator("#tracking-reschedule-date")).toHaveValue("2026-10-05");
   await expect(page.locator('[data-customer-action="reschedule"]')).toBeEnabled();
   expect(await page.locator("#tracking-reschedule-slot option").evaluateAll((options) => options.map((option) => option.value))).toEqual(["19:00", "20:00", "21:00"]);
+});
+
+test("same-day slots inside the configured booking notice are closed and the notice is shown", async ({ page }) => {
+  await page.clock.install({ time: new Date("2026-10-05T10:00:00Z") });
+  await fixtures(page, { config: (route) => route.fulfill({ json: { bookingEnabled: true, turnstileSiteKey: "", bookingLeadMinutes: 90 } }) });
+  await page.goto("/");
+  await page.locator("#booking-entry-button").click();
+  await expect(page.locator("#slot-lead-hint")).toHaveText("Book at least 90 min before pickup");
+  await page.locator("#calendar-grid .calendar-day").first().click();
+  await expect(page.locator('.slot-button[data-slot="19:00"]')).toBeDisabled();
+  await expect(page.locator('.slot-button[data-slot="19:00"]')).toContainText("Closed");
+  await expect(page.locator('.slot-button[data-slot="20:00"]')).toBeEnabled();
 });
 
 test("booking timeout restores same-booking retry without rotating its key or payload", async ({ page }) => {

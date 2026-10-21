@@ -28,10 +28,26 @@ export function isWeekend(dateString) {
   return day === 0 || day === 6;
 }
 
+let weekdaySlots = ["19:00", "20:00", "21:00"];
+let weekendSlots = ["10:00", "11:00", "12:00", "19:00", "20:00", "21:00"];
+
+export function setPickupSchedule(weekday, weekend) {
+  const normalize = (slots) => {
+    if (!Array.isArray(slots) || !slots.length || slots.length > 12
+      || slots.some((slot) => typeof slot !== "string" || !/^([01]\d|2[0-3]):[0-5]\d$/.test(slot))) return null;
+    return [...new Set(slots)].sort();
+  };
+  const nextWeekday = normalize(weekday);
+  const nextWeekend = normalize(weekend);
+  if (!nextWeekday || !nextWeekend) return false;
+  const changed = nextWeekday.join(",") !== weekdaySlots.join(",") || nextWeekend.join(",") !== weekendSlots.join(",");
+  weekdaySlots = nextWeekday;
+  weekendSlots = nextWeekend;
+  return changed;
+}
+
 export function getSlotsForDate(dateString) {
-  const slots = ["19:00", "20:00", "21:00"];
-  if (isWeekend(dateString)) slots.unshift("10:00", "11:00", "12:00");
-  return slots;
+  return isWeekend(dateString) ? [...weekendSlots] : [...weekdaySlots];
 }
 
 export function isSlotInCurrentSchedule(dateString, slot) {
@@ -63,9 +79,20 @@ export function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+let bookingLeadMinutes = 60;
+
+export function setBookingLeadMinutes(minutes) {
+  if (!Number.isInteger(minutes) || minutes < 0 || minutes > 1440 || minutes === bookingLeadMinutes) return false;
+  bookingLeadMinutes = minutes;
+  return true;
+}
+
+export function getBookingLeadMinutes() {
+  return bookingLeadMinutes;
+}
+
 export function isSlotClosed(dateString, slot) {
-  if (dateString !== getTodayString()) return false;
-  return Date.now() >= Date.parse(`${dateString}T${slot}:00+08:00`) + 45 * 60 * 1000;
+  return Date.now() >= Date.parse(`${dateString}T${slot}:00+08:00`) - bookingLeadMinutes * 60 * 1000;
 }
 
 export function showError(element, message) {

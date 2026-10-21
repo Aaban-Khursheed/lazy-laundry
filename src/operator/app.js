@@ -1,10 +1,12 @@
 import { applyVariants } from "../shared/variants.js";
+import { setBookingLeadMinutes } from "../shared/utils.js";
 import { initializeOperator, renderOperatorDashboard, suspendOperator } from "./modules/dashboard.js";
 
 const desktop = window.matchMedia("(min-width: 1024px)");
 const shell = document.querySelector("#operator-shell");
 const guard = document.querySelector("#operator-desktop-required");
 
+setBookingLeadMinutes(0);
 applyVariants();
 
 function updateWorkspace() {

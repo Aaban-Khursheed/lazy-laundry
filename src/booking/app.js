@@ -1,5 +1,6 @@
 import { applyVariants } from "../shared/variants.js";
 import { apiRequest } from "../shared/api.js";
+import { getBookingLeadMinutes, setBookingLeadMinutes, setPickupSchedule } from "../shared/utils.js";
 import { initializeBooking, isBookingLocked, refreshBookingWindow, resetBookingForm, setBookingEnabled } from "./modules/booking.js";
 import {
   initializeTracking,
@@ -52,6 +53,13 @@ async function applyPublicConfig() {
     }
     bookingEnabled = config.bookingEnabled;
     setBookingEnabled(bookingEnabled);
+    const scheduleChanged = setPickupSchedule(config.weekdaySlots, config.weekendSlots);
+    const leadChanged = setBookingLeadMinutes(config.bookingLeadMinutes);
+    if (scheduleChanged || leadChanged) refreshBookingWindow(true);
+    const leadHint = document.querySelector("#slot-lead-hint");
+    const lead = getBookingLeadMinutes();
+    leadHint.textContent = `Book at least ${lead} min before pickup`;
+    leadHint.hidden = lead === 0;
     entryLabel.textContent = bookingEnabled ? "Make a booking" : "Bookings paused";
     stateMessage.querySelector("strong").textContent = bookingEnabled ? "Edumetro, USJ 1 service area" : "Bookings are temporarily paused";
     stateMessage.querySelector("span").textContent = bookingEnabled

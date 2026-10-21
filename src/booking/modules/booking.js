@@ -1,6 +1,6 @@
 import { buttonVariants } from "../../shared/variants.js";
-import { PRICING, STATUS_STEPS } from "./constants.js";
-import { API_MODE, apiRequest } from "./api.js";
+import { PRICING } from "./constants.js";
+import { apiRequest } from "./api.js";
 import { getTurnstileToken } from "./turnstile.js";
 import {
   clearError,
@@ -9,6 +9,7 @@ import {
   formatDate,
   formatMoney,
   formatSlot,
+  getBookingLeadMinutes,
   getMaxBookingDateString,
   getTodayString,
   getSlotsForDate,
@@ -37,7 +38,7 @@ const checkoutTotalPrice = document.querySelector("#checkout-total-price");
 const checkoutPriceBreakdown = document.querySelector("#checkout-price-breakdown");
 const checkoutPickupSummary = document.querySelector("#checkout-pickup-summary");
 const bookingStepError = document.querySelector("#booking-step-error");
-const termsAcceptedInput = document.querySelector("#terms-accepted");
+
 const countryCodeInput = document.querySelector("#customer-country-code");
 const customerPhoneInput = document.querySelector("#customer-phone");
 const promoInput = document.querySelector("#customer-promo");
@@ -47,6 +48,8 @@ const formError = document.querySelector("#form-error");
 const submitButton = bookingForm.querySelector('[type="submit"]');
 
 let currentBookedSlots = new Set();
+let currentBlockedSlots = new Set();
+let currentBlockedDate = false;
 let loadedAvailabilityDate = "";
 let availabilityRequestId = 0;
 let currentEstimate = null;
@@ -220,6 +223,8 @@ function showAvailabilityMessage(message, retryDate = "") {
 async function loadAvailability(dateString, alignToAvailable) {
   const requestId = ++availabilityRequestId;
   currentBookedSlots = new Set();
+  currentBlockedSlots = new Set();
+  currentBlockedDate = false;
   loadedAvailabilityDate = "";
   const selectedSlot = pickupSlotInput.value;
   slotGrid.classList.toggle("weekend", isWeekend(dateString));
@@ -235,9 +240,16 @@ async function loadAvailability(dateString, alignToAvailable) {
     }
 
     currentBookedSlots = new Set(result.bookedSlots.filter((slot) => typeof slot === "string"));
+    currentBlockedSlots = new Set(Array.isArray(result.blockedSlots) ? result.blockedSlots.filter((slot) => typeof slot === "string") : []);
+    currentBlockedDate = result.blockedDate === true;
     loadedAvailabilityDate = dateString;
-    pickupSlotInput.value = selectedSlot;
-    renderSlots(alignToAvailable);
+    if (currentBlockedDate) {
+      pickupSlotInput.value = "";
+      showAvailabilityMessage("Pickup is unavailable on this date. Choose another day.");
+    } else {
+      pickupSlotInput.value = selectedSlot;
+      renderSlots(alignToAvailable);
+    }
   } catch (error) {
     if (requestId !== availabilityRequestId || pickupDateInput.value !== dateString || isBookingLocked()) {
       return;
@@ -248,21 +260,21 @@ async function loadAvailability(dateString, alignToAvailable) {
 
 function refreshSlots(dateString, alignToAvailable = false) {
   if (isBookingLocked()) return;
-  if (API_MODE) {
-    loadAvailability(dateString, alignToAvailable);
-  } else {
-    renderSlots(alignToAvailable);
-  }
+  loadAvailability(dateString, alignToAvailable);
 }
 
 function isDateSlotBooked(dateString, slot) {
   return currentBookedSlots.has(slot);
 }
 
+function isSlotBlocked(slot) {
+  return currentBlockedDate || currentBlockedSlots.has(slot);
+}
+
 export function renderSlots(alignToAvailable = false) {
   if (isBookingLocked()) return;
   const dateString = pickupDateInput.value;
-  if (API_MODE && loadedAvailabilityDate !== dateString) {
+  if (loadedAvailabilityDate !== dateString) {
     return;
   }
 
@@ -277,15 +289,17 @@ export function renderSlots(alignToAvailable = false) {
   slots.forEach((slot) => {
     const button = document.createElement("button");
     const booked = isDateSlotBooked(dateString, slot);
+    const blocked = isSlotBlocked(slot);
     const inCurrentSchedule = isSlotInCurrentSchedule(dateString, slot);
     const expired = inCurrentSchedule && isSlotClosed(dateString, slot);
-    const state = booked ? "Booked" : !inCurrentSchedule ? "Coming soon" : expired ? "Expired" : "Open";
+    const state = booked ? "Booked" : blocked ? "Closed" : !inCurrentSchedule ? "Coming soon" : expired ? "Closed" : "Open";
+    const stateClass = expired || blocked ? "expired" : state.toLowerCase().replaceAll(" ", "-");
     button.type = "button";
-    button.className = `slot-button ${state.toLowerCase().replaceAll(" ", "-")}`;
+    button.className = `slot-button ${stateClass}`;
     button.innerHTML = `<strong>${formatSlot(slot)}</strong><small>${state}</small>`;
     button.dataset.slot = slot;
-    button.disabled = booked || !inCurrentSchedule || expired;
-    button.title = booked ? "Already booked" : !inCurrentSchedule ? "Coming soon" : expired ? "Slot expired" : "Open for booking";
+    button.disabled = booked || blocked || !inCurrentSchedule || expired;
+    button.title = booked ? "Already booked" : blocked ? "Not available for pickup" : !inCurrentSchedule ? "Coming soon" : expired ? `Booking closes ${getBookingLeadMinutes()} min before pickup` : "Open for booking";
     button.setAttribute("aria-label", `${formatSlot(slot)}, ${state.toLowerCase()}`);
     button.setAttribute("aria-pressed", String(slot === selectedSlot && !button.disabled));
 
@@ -326,13 +340,13 @@ export function renderSlots(alignToAvailable = false) {
     }
   });
 
-  if (selectedSlot && (!isSlotInCurrentSchedule(dateString, selectedSlot) || isDateSlotBooked(dateString, selectedSlot) || isSlotClosed(dateString, selectedSlot))) {
+  if (selectedSlot && (!isSlotInCurrentSchedule(dateString, selectedSlot) || isDateSlotBooked(dateString, selectedSlot) || isSlotBlocked(selectedSlot) || isSlotClosed(dateString, selectedSlot))) {
     pickupSlotInput.value = "";
   }
 
   if (alignToAvailable) {
     const slotButtons = [...slotGrid.querySelectorAll(".slot-button")];
-    const openIndex = slots.findIndex((slot) => isSlotInCurrentSchedule(dateString, slot) && !isDateSlotBooked(dateString, slot) && !isSlotClosed(dateString, slot));
+    const openIndex = slots.findIndex((slot) => isSlotInCurrentSchedule(dateString, slot) && !isDateSlotBooked(dateString, slot) && !isSlotBlocked(slot) && !isSlotClosed(dateString, slot));
     const target = slotButtons[openIndex >= 0 ? openIndex : slots.findIndex((slot) => isSlotInCurrentSchedule(dateString, slot))];
     if (target) {
       const targetOffset = target.getBoundingClientRect().left - slotGrid.getBoundingClientRect().left + slotGrid.scrollLeft;
@@ -518,7 +532,7 @@ async function submitApiBooking(payload, signature, onBookingCreated) {
     }
     const turnstileToken = await getTurnstileToken("booking");
     if (!pendingBooking && formSignature() !== signature) throw new Error("Your details changed during verification. Review them and try again.");
-    if (!pendingBooking && (payload.pickupDate < getTodayString() || payload.pickupDate > getMaxBookingDateString() || isSlotClosed(payload.pickupDate, payload.pickupSlot))) {
+    if (!pendingBooking && (payload.pickupDate < getTodayString() || payload.pickupDate > getMaxBookingDateString() || isSlotBlocked(payload.pickupSlot) || isSlotClosed(payload.pickupDate, payload.pickupSlot))) {
       slotConflict = true;
       throw new Error("The pickup time expired during confirmation. Choose an available pickup slot.");
     }
@@ -532,7 +546,7 @@ async function submitApiBooking(payload, signature, onBookingCreated) {
       },
       body: pendingBooking.payload,
     });
-    if (!result?.booking || !/^LL-[A-F0-9]{8}$/.test(result.booking.number) || !/^[A-Za-z0-9_-]{43}$/.test(result.trackingToken) || !/^\d{4}-\d{2}-\d{2}$/.test(result.booking.pickupDate) || !getSlotsForDate(result.booking.pickupDate).includes(result.booking.pickupSlot) || typeof result.booking.total !== "number" || !Number.isFinite(result.booking.total) || result.booking.total < 0 || !PRICING[result.booking.packageSize] || typeof result.booking.readyTime !== "string") {
+    if (!result?.booking || !/^LL-[A-F0-9]{8}$/.test(result.booking.number) || !/^[A-Za-z0-9_-]{43}$/.test(result.trackingToken) || !/^\d{4}-\d{2}-\d{2}$/.test(result.booking.pickupDate) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(result.booking.pickupSlot) || typeof result.booking.total !== "number" || !Number.isFinite(result.booking.total) || result.booking.total < 0 || !PRICING[result.booking.packageSize] || typeof result.booking.readyTime !== "string") {
       const error = new Error("The booking confirmation response could not be verified.");
       error.outcomeUnknown = true;
       throw error;
@@ -540,8 +554,12 @@ async function submitApiBooking(payload, signature, onBookingCreated) {
     onBookingCreated(result.booking, result.trackingToken);
     pendingBooking = null;
   } catch (error) {
-    if (pendingBooking && (!sent || error.outcomeUnknown || !error.status)) {
-      reportBookingError(`Your confirmation could not be verified; retry the same booking. It may already be saved. Your original details are protected until confirmation is recovered.${!sent ? ` ${error.message}` : ""}`);
+    if (pendingBooking && (!sent || error.outcomeUnknown || !error.status || error.code === "idempotency_key_reused")) {
+      if (error.code === "idempotency_key_reused") {
+        reportBookingError("We couldn't match this retry to your earlier attempt. It may already be saved — please contact Lazy Laundry on WhatsApp before booking again.");
+      } else {
+        reportBookingError(`Your confirmation could not be verified; retry the same booking. It may already be saved. Your original details are protected until confirmation is recovered.${!sent ? ` ${error.message}` : ""}`);
+      }
     } else {
       if (sent) pendingBooking = null;
       if (error.status === 409 && error.code === "quote_changed") {
@@ -553,7 +571,7 @@ async function submitApiBooking(payload, signature, onBookingCreated) {
           reportBookingError(`The quote changed, but the new quote could not be loaded. Retry before confirming. ${quoteError.message}`);
         }
       } else {
-        slotConflict ||= error.status === 409;
+        slotConflict ||= error.status === 409 && (error.code === "slot_taken" || error.code === "slot_unavailable");
         reportBookingError(error.status === 503 ? "Booking is currently unavailable. Please try again." : error.message || "The booking could not be confirmed. Please try again.");
       }
     }
@@ -573,11 +591,11 @@ export function initializeBooking({ showView, onBookingCreated }) {
     if (isBookingLocked() || !bookingEnabled) return;
     refreshBookingWindow();
     clearError(bookingStepError);
-    if (!pickupSlotInput.value || !isSlotInCurrentSchedule(pickupDateInput.value, pickupSlotInput.value)) {
+    if (!pickupSlotInput.value || !isSlotInCurrentSchedule(pickupDateInput.value, pickupSlotInput.value) || isSlotBlocked(pickupSlotInput.value)) {
       showError(bookingStepError, "Choose an available pickup slot before continuing.");
       return;
     }
-    if (API_MODE && loadedAvailabilityDate !== pickupDateInput.value) {
+    if (loadedAvailabilityDate !== pickupDateInput.value) {
       showError(bookingStepError, "Pickup availability is still loading or unavailable. Retry availability before continuing.");
       return;
     }
@@ -654,12 +672,12 @@ export function initializeBooking({ showView, onBookingCreated }) {
       return;
     }
 
-    if (API_MODE && loadedAvailabilityDate !== pickupDateInput.value) {
+    if (loadedAvailabilityDate !== pickupDateInput.value) {
       showError(formError, "Pickup availability is still loading or unavailable. Retry availability before confirming.");
       return;
     }
 
-    if (isDateSlotBooked(pickupDateInput.value, pickupSlotInput.value) || isSlotClosed(pickupDateInput.value, pickupSlotInput.value)) {
+    if (isDateSlotBooked(pickupDateInput.value, pickupSlotInput.value) || isSlotBlocked(pickupSlotInput.value) || isSlotClosed(pickupDateInput.value, pickupSlotInput.value)) {
       showError(formError, "That pickup slot is no longer available. Please choose another slot.");
       refreshSlots(pickupDateInput.value, true);
       return;

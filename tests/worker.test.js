@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { formatSlot, getTodayString, isWeekend as clientIsWeekend, isSlotClosed as clientIsSlotClosed } from "../src/booking/modules/utils.js";
+import { describe, expect, it, vi } from "vitest";
+import { formatSlot, getTodayString, isWeekend as clientIsWeekend, isSlotClosed as clientIsSlotClosed, setBookingLeadMinutes } from "../src/booking/modules/utils.js";
 import worker, {
+  bookingLeadMinutes,
   canonicalize,
   csvCell,
   customerCancellationIsLate,
@@ -74,6 +75,40 @@ describe("booking domain helpers", () => {
   it("allows a future scheduled slot within the seven-day window", () => {
     expect(isPickupSlotAvailable(localDateAfter(1), "19:00")).toBe(true);
     expect(isPickupSlotAvailable(localDateAfter(7), "19:00")).toBe(false);
+  });
+
+  it("closes customer booking at the configured lead time before pickup (default 60 minutes)", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-10-20T17:59:00+08:00"));
+      expect(isPickupSlotAvailable("2026-10-20", "19:00")).toBe(true);
+      vi.setSystemTime(new Date("2026-10-20T18:00:00+08:00"));
+      expect(isPickupSlotAvailable("2026-10-20", "19:00")).toBe(false);
+      expect(isPickupSlotAvailable("2026-10-20", "19:00", 0)).toBe(true);
+      vi.setSystemTime(new Date("2026-10-20T19:00:00+08:00"));
+      expect(isPickupSlotAvailable("2026-10-20", "19:00", 0)).toBe(false);
+      vi.setSystemTime(new Date("2026-10-20T19:10:00+08:00"));
+      expect(clientIsSlotClosed("2026-10-20", "21:00")).toBe(false);
+      vi.setSystemTime(new Date("2026-10-20T20:00:00+08:00"));
+      expect(clientIsSlotClosed("2026-10-20", "21:00")).toBe(true);
+      expect(setBookingLeadMinutes(0)).toBe(true);
+      expect(clientIsSlotClosed("2026-10-20", "21:00")).toBe(false);
+    } finally {
+      setBookingLeadMinutes(60);
+      vi.useRealTimers();
+    }
+  });
+
+  it("parses BOOKING_LEAD_MINUTES safely", () => {
+    expect(bookingLeadMinutes({})).toBe(60);
+    expect(bookingLeadMinutes({ BOOKING_LEAD_MINUTES: "30" })).toBe(30);
+    expect(bookingLeadMinutes({ BOOKING_LEAD_MINUTES: "0" })).toBe(0);
+    for (const value of ["abc", "-5", "1441", "2.5", ""]) expect(bookingLeadMinutes({ BOOKING_LEAD_MINUTES: value })).toBe(60);
+  });
+
+  it("publishes the booking lead time in /api/config", async () => {
+    const response = await worker.fetch(new Request("http://localhost:8787/api/config"), { ENVIRONMENT: "local", CUSTOMER_HOSTS: "localhost", BOOKING_LEAD_MINUTES: "45" });
+    expect((await response.json()).bookingLeadMinutes).toBe(45);
   });
 
   it("marks cancellation late at and after the ten-minute cutoff", () => {
@@ -362,8 +397,8 @@ describe("ambiguous booking recovery after the pickup window closes", () => {
       ENVIRONMENT: "local", CUSTOMER_HOSTS: "localhost", PUBLIC_BOOKING_ENABLED: enabled,
       DB: { prepare: () => ({ bind: () => ({ first: async () => ({ request_payload_hash: "different" }) }) }) },
     });
-    expect(response.status).toBe(409);
-    expect(await response.json()).toEqual({ error: "This retry key was already used for a different booking" });
+    expect(response.status).toBe(422);
+    expect(await response.json()).toEqual({ error: "This retry key was already used for a different booking", code: "idempotency_key_reused" });
   });
 });
 

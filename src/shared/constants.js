@@ -1,7 +1,17 @@
-export const PRICING = {
-  10: { base: 29.99, express: 10, hanger: 0 },
-  18: { base: 54.99, express: 15, hanger: 0 },
+// Canonical price table in sen — the Worker (api/worker.js) and the display
+// PRICING map below both derive from this; do not duplicate values elsewhere.
+export const PRICE_CENTS = {
+  10: { base: 2999, express: 1000, hanger: 0 },
+  18: { base: 5499, express: 1500, hanger: 0 },
 };
+
+// Display copy of the same table in RM.
+export const PRICING = Object.fromEntries(
+  Object.entries(PRICE_CENTS).map(([size, tier]) => [
+    size,
+    { base: tier.base / 100, express: tier.express / 100, hanger: tier.hanger / 100 },
+  ]),
+);
 
 export const SERVICE_LABELS = {
   standard: "Lazy Wash",
