@@ -41,6 +41,31 @@ gateway exists.
 set `"false"` and deploy. Customer tracking/cancellation stay live.
 Only change it on the owner's instruction.
 
+## Shipping workflow
+
+Default flow for any code or UI change:
+
+1. Branch from `v1.0`. Keep diffs small and single-purpose.
+2. Check locally: `npm run lint && npm run test`; add or extend tests
+   for new behavior; `npm run test:e2e` for UI-heavy changes;
+   `npm run db:check` whenever a migration file exists.
+3. Open a PR into `v1.0`. CI runs the full gate ladder (`db:check` →
+   lint+unit → build → infra+integration → e2e → `deploy:dry-run`) and
+   uploads a per-gate evidence artifact.
+4. Merge only on green gates plus a reviewed diff.
+5. On `v1.0`, pull, then apply remote migrations **before** deploying:
+   `wrangler d1 migrations apply lazylaundry-db --remote`.
+6. `npm run deploy`, then post-deploy smoke: `/api/health`, one real
+   customer flow on the customer host, and an ops-host sign-in.
+7. Record honestly: PASS / FAIL / NOT ESTABLISHED — never claim a check
+   that was not run.
+
+UI changes specifically: edit only `src/` and the CSS files; run
+`npm run build:ui` (or `-- --watch` alongside `npm run dev`) to
+regenerate the shipped bundles. Never hand-edit or add readable JS
+under `public/` — the bundles are generated assets. The e2e layout spec
+owns the mandated viewport widths; extend it rather than eyeballing.
+
 ## Deploy & rollback
 
 ```bash

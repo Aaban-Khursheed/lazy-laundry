@@ -3,7 +3,7 @@ name: Local Release Gates
 on:
   pull_request:
   push:
-    branches: [v1.0]
+    branches: [v1.0, main]
   workflow_dispatch:
 
 permissions:
