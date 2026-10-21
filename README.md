@@ -13,7 +13,14 @@ assets are never served on customer hosts.
 Full system internals — request pipeline, data model, security model,
 failure-mode contract, decision records: **`docs/ARCHITECTURE.md`**.
 Day-to-day operation, alerts, emergency stop, deploy/rollback, restore drill:
-**`docs/OPERATIONS.md`**.
+**`docs/OPERATIONS.md`**. Maintainer handoff record: **`docs/HANDOFF.md`**.
+
+## Maintenance
+
+Day-to-day maintenance moved to the incoming maintainer on 2026-10-21
+(role-based record; see `docs/HANDOFF.md` for the access checklist and
+standing orders). The canonical repository is unchanged:
+`Aaban-Khursheed/lazy-laundry`, worked via collaborator access.
 
 ## Commands
 

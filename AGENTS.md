@@ -3,6 +3,7 @@
 ## Scope
 
 - This repository is the canonical Lazy Laundry project for `Aaban-Khursheed/lazy-laundry`.
+- Day-to-day maintenance sits with the incoming maintainer as of 2026-10-21 (role-based record, `docs/HANDOFF.md`); the canonical repository is unchanged.
 - Do not modify unrelated accounts, repositories, or identities, including `Dannny-101` and `tenandseeagency`.
 - Public booking intake is open by owner decision (2026-10-19). `PUBLIC_BOOKING_ENABLED` in `wrangler.jsonc` must match production; change it only on the owner's instruction (it is the emergency stop; see README).
 

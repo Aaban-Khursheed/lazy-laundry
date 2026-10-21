@@ -1,6 +1,6 @@
 # Lazy Laundry — Technical Architecture
 
-Last verified against source: 2026-10-18. When behavior and this document
+Last verified against source: 2026-10-21. When behavior and this document
 disagree, the source wins — update this file.
 
 ## System context
